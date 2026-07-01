@@ -13,7 +13,7 @@ export function clearToken() {
 }
 
 // UPDATE THIS LINE: Replace the fallback string with your actual Render Backend URL!
-const API = import.meta.env.VITE_API_URL || https://ethiopia-fleet-project.onrender.com ;
+const API = import.meta.env.VITE_API_URL || 'https://ethiopia-fleet-project.onrender.com' ;
 
 let onUnauthorized = () => {};
 export function registerUnauthorizedHandler(handler) {
