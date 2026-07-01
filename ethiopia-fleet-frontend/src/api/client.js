@@ -2,18 +2,33 @@ let inMemoryToken = null;
 
 export function setToken(token) {
   inMemoryToken = token;
+  try {
+    sessionStorage.setItem('fleet_token', token);
+  } catch {
+    // sessionStorage unavailable (e.g. private mode) — token will only
+    // survive for this page load, same as before this fix
+  }
 }
 
 export function getToken() {
+  if (!inMemoryToken) {
+    try {
+      inMemoryToken = sessionStorage.getItem('fleet_token');
+    } catch {
+      inMemoryToken = null;
+    }
+  }
   return inMemoryToken;
 }
 
 export function clearToken() {
   inMemoryToken = null;
+  try {
+    sessionStorage.removeItem('fleet_token');
+  } catch {}
 }
 
-// UPDATE THIS LINE: Replace the fallback string with your actual Render Backend URL!
-const API = import.meta.env.VITE_API_URL || 'https://ethiopia-fleet-project.onrender.com' ;
+const API = import.meta.env.VITE_API_URL || 'https://ethiopia-fleet-project.onrender.com';
 
 let onUnauthorized = () => {};
 export function registerUnauthorizedHandler(handler) {
