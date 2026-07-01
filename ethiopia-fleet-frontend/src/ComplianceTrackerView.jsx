@@ -20,8 +20,7 @@ import {
   XCircle, Clock, RefreshCw, ChevronDown, ChevronUp, Phone,
 } from "lucide-react";
 
-const API = "http://localhost:3000";
-const get = (path) => fetch(`${API}${path}`).then((r) => r.json());
+import { get } from './api/client';
 
 const C = {
   bg: "#0d1117", surface: "#161b22", elevated: "#1c2330", border: "#30363d",
