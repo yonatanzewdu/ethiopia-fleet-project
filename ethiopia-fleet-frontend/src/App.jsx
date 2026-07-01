@@ -1528,6 +1528,14 @@ export default function App() {
     return saved ? JSON.parse(saved) : null;
   } catch { return null; }
 });
+
+  // ── Mobile detection ──────────────────────────────────────────────────────
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
 useEffect(() => {
     registerUnauthorizedHandler(() => {
       clearToken();
@@ -1630,8 +1638,31 @@ const [showLanding, setShowLanding] = useState(
       `}</style>
 
       <div style={styles.app}>
-        {sideOpen && (
-          <aside style={styles.sidebar}>
+        {/* Dim overlay — only on mobile when sidebar is open */}
+        {isMobile && sideOpen && (
+          <div
+            onClick={() => setSideOpen(false)}
+            style={{
+              position: "fixed", inset: 0, zIndex: 999,
+              background: "rgba(0,0,0,0.55)",
+            }}
+          />
+        )}
+
+        <aside style={{
+          ...styles.sidebar,
+          ...(isMobile ? {
+            position: "fixed",
+            top: 0, left: 0,
+            height: "100vh",
+            zIndex: 1000,
+            transform: sideOpen ? "translateX(0)" : "translateX(-100%)",
+            transition: "transform 0.25s ease",
+            boxShadow: sideOpen ? "4px 0 24px rgba(0,0,0,0.7)" : "none",
+          } : {
+            display: sideOpen ? "flex" : "none",
+          }),
+        }}>
             <div style={styles.sidebarLogo}>
               <div style={styles.logoMark}><Activity size={15} color="#fff" /></div>
               <div>
@@ -1642,7 +1673,7 @@ const [showLanding, setShowLanding] = useState(
 
             <nav style={{ flex: 1, padding: "10px 0" }}>
               {visibleNavs.map(({ id, label, icon: Icon }) => (
-                <div key={id} style={styles.navItem(view === id)} onClick={() => { setFocusedVehicleId(null); setView(id); }}>
+                <div key={id} style={styles.navItem(view === id)} onClick={() => { setFocusedVehicleId(null); setView(id); if (isMobile) setSideOpen(false); }}>
                   <Icon size={15} />{label}
                 </div>
               ))}
@@ -1673,7 +1704,6 @@ const [showLanding, setShowLanding] = useState(
               </button>
             </div>
           </aside>
-        )}
 
         <div style={styles.main}>
           <header style={styles.header}>
