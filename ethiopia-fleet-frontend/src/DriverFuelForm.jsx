@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { get, post, postForm } from './api/client';
 
 export function DriverFuelForm({ userSession }) {
   const [assignedVehicle, setAssignedVehicle] = useState(null);
@@ -17,15 +18,7 @@ export function DriverFuelForm({ userSession }) {
 
   // 1. Fetch the driver's assigned vehicle metadata on mount
   useEffect(() => {
-    fetch('http://localhost:3000/fuel/driver/vehicle', {
-      headers: {
-        'Authorization': `Bearer ${userSession?.token}`
-      }
-    })
-    .then(res => {
-      if (!res.ok) throw new Error("Could not find vehicle mapping");
-      return res.json();
-    })
+    get('/fuel/driver/vehicle')
     .then(data => {
       setAssignedVehicle(data);
       setIsLoadingVehicle(false);
@@ -36,7 +29,7 @@ export function DriverFuelForm({ userSession }) {
       setAssignedVehicle({ id: 1, plateNumber: 'AA-12121', model: 'toyota vitz' });
       setIsLoadingVehicle(false);
     });
-  }, [userSession?.token]);
+  }, []);
 
   // 2. Compute the exact total outlay live to show the driver
   const computedTotalCost = (Number(formData.litresFilled || 0) * Number(formData.pricePerLitre || 0)).toFixed(2);
@@ -79,8 +72,6 @@ export function DriverFuelForm({ userSession }) {
     try {
       // Use FormData when a photo is attached so the file uploads as multipart;
       // fall back to plain JSON when there's no photo.
-      let response;
-
       if (receiptPhoto) {
         const fd = new FormData();
         fd.append('vehicleId', assignedVehicle.id);
@@ -90,15 +81,7 @@ export function DriverFuelForm({ userSession }) {
         fd.append('amountEtb', parseFloat(computedTotalCost));
         fd.append('receiptImage', receiptPhoto, receiptPhoto.name);
 
-        response = await fetch('http://localhost:3000/fuel/driver/submit', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${userSession?.token}`,
-            // NOTE: do NOT set Content-Type here — the browser sets the
-            // correct multipart boundary automatically for FormData.
-          },
-          body: fd,
-        });
+        await postForm('/fuel/driver/submit', fd);
       } else {
         const payload = {
           vehicleId: assignedVehicle.id,
@@ -109,32 +92,20 @@ export function DriverFuelForm({ userSession }) {
           receiptImage: null,
         };
 
-        response = await fetch('http://localhost:3000/fuel/driver/submit', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${userSession?.token}`
-          },
-          body: JSON.stringify(payload)
-        });
+        await post('/fuel/driver/submit', payload);
       }
 
-      if (response.ok) {
-        alert('Fuel request logged successfully!');
-        setFormData({
-          litresFilled: '',
-          pricePerLitre: '',
-          odometerReading: ''
-        });
-        setReceiptPhoto(null);
-        setReceiptPreview(null);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      } else {
-        const errData = await response.json();
-        alert(`Error: ${errData.message || 'Submission failed'}`);
-      }
+      alert('Fuel request logged successfully!');
+      setFormData({
+        litresFilled: '',
+        pricePerLitre: '',
+        odometerReading: ''
+      });
+      setReceiptPhoto(null);
+      setReceiptPreview(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (error) {
-      alert('Could not establish connection with the backend API.');
+      alert(`Error: ${error?.message || 'Could not establish connection with the backend API.'}`);
     } finally {
       setIsSubmitting(false);
     }
