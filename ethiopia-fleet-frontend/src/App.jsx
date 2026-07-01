@@ -1645,11 +1645,18 @@ const [showLanding, setShowLanding] = useState(
 
   const loadCompanies = useCallback(async () => {
     try {
-      const list = Array.isArray(await get("/companies")) ? await get("/companies") : [];
+      const result = await get("/companies");
+      const list = Array.isArray(result) ? result : [];
       setCompanies(list);
       if (list.length > 0 && !activeCompanyId) setActiveCompanyId(String(list[0].id));
-    } catch {
-      showToast("Backend offline", "error");
+    } catch (err) {
+      // A 401 means the session/token is invalid — registerUnauthorizedHandler
+      // already logs the user out in that case, so don't also claim the
+      // backend is offline (that message should be reserved for real
+      // network failures).
+      if (!err?.message?.includes("Session expired")) {
+        showToast("Backend offline", "error");
+      }
     } finally {
       setLoading(false);
     }
