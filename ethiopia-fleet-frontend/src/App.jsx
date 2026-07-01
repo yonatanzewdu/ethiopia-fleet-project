@@ -16,7 +16,21 @@ import AnalyticsReportingView from './AnalyticsReportingView';
 import ComplianceTrackerView from './ComplianceTrackerView';
 import LandingPage from './LandingPage';
 import { DriverFuelForm } from './DriverFuelForm';
-import { get, post, patch, put, del, setToken, clearToken, registerUnauthorizedHandler } from './api/client';
+const API = "http://localhost:3000";
+
+async function handleResponse(res) {
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.message || `Request failed (${res.status})`);
+  }
+  return res.json().catch(() => ({}));
+}
+
+const get   = (path)        => fetch(`${API}${path}`).then(handleResponse);
+const post  = (path, body)  => fetch(`${API}${path}`, { method: "POST",  headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(handleResponse);
+const patch = (path, body)  => fetch(`${API}${path}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(handleResponse);
+const put   = (path, body)  => fetch(`${API}${path}`, { method: "PUT",   headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(handleResponse);
+const del   = (path)        => fetch(`${API}${path}`, { method: "DELETE" }).then(handleResponse);
 
 function formatDate(value) {
   if (!value) return "—";
@@ -209,19 +223,27 @@ function LoginScreen({ onLoginSuccess }) {
   const [error,    setError]    = useState("");
   const [loading,  setLoading]  = useState(false);
 
- const handleLogin = async (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setError(""); setLoading(true);
     try {
-      const { access_token, user } = await post('/auth/login', { username, password });
-      setToken(access_token);
-      onLoginSuccess(user);
+      const res = await fetch(`${API}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Invalid credentials.");
+      }
+      onLoginSuccess(await res.json());
     } catch (err) {
       setError(err.message || "Authentication failed. Ensure the backend is running.");
     } finally {
       setLoading(false);
     }
   };
+
   return (
     <div style={{ display: "flex", height: "100vh", width: "100vw", background: C.bg, alignItems: "center", justifyContent: "center", fontFamily: "'Inter', sans-serif" }}>
       <div style={{ ...styles.card(), width: 340, padding: "28px 24px" }}>
@@ -1195,13 +1217,16 @@ function makeIcon(color, isBreaching) {
 
 const DEFAULT_GEOFENCE = { lat: 9.03, lng: 38.74, radius: 2000 };
 
+
 function LiveMapView({ companyId, focusedVehicleId }) {
-  const [vehicles,        setVehicles]        = useState([]);
-  const [geofenceMap,     setGeofenceMap]     = useState({}); // { [vehicleId]: { lat, lng, radius } }
-  const [selectedId,      setSelectedId]      = useState(focusedVehicleId || null);
-  const [draft,           setDraft]           = useState(DEFAULT_GEOFENCE);
-  const [saving,          setSaving]          = useState(false);
-  const [saveMsg,         setSaveMsg]         = useState("");
+  const [vehicles,    setVehicles]    = useState([]);
+  const [geofenceMap, setGeofenceMap] = useState({});
+  const [selectedId,  setSelectedId]  = useState(focusedVehicleId || null);
+  const [draft,       setDraft]       = useState(DEFAULT_GEOFENCE);
+  const [saving,      setSaving]      = useState(false);
+  const [saveMsg,     setSaveMsg]     = useState("");
+  const [panelOpen,   setPanelOpen]   = useState(false);
+  const isMobile = window.innerWidth <= 768;
 
   const loadVehiclesAndGeofences = useCallback(async () => {
     if (!companyId) return;
@@ -1212,8 +1237,6 @@ function LiveMapView({ companyId, focusedVehicleId }) {
       ]);
       setVehicles(Array.isArray(veh) ? veh : []);
       const map = {};
-      // Postgres `decimal` columns return as strings over JSON — coerce once,
-      // here, so .toFixed()/.toLocaleString() downstream always work.
       (Array.isArray(geofences) ? geofences : []).forEach((g) => {
         map[g.vehicleId] = {
           ...g,
@@ -1228,16 +1251,12 @@ function LiveMapView({ companyId, focusedVehicleId }) {
 
   useEffect(() => { loadVehiclesAndGeofences(); }, [loadVehiclesAndGeofences]);
 
-  // Default the editor's selected vehicle to the focused one, or the first
-  // vehicle in the list, once vehicles have loaded.
   useEffect(() => {
     if (selectedId) return;
     if (focusedVehicleId) { setSelectedId(focusedVehicleId); return; }
     if (vehicles.length > 0) setSelectedId(vehicles[0].id);
   }, [vehicles, focusedVehicleId, selectedId]);
 
-  // Sync the editable draft whenever the selected vehicle (or its saved
-  // geofence) changes.
   useEffect(() => {
     if (!selectedId) return;
     setDraft(geofenceMap[selectedId] || DEFAULT_GEOFENCE);
@@ -1255,9 +1274,9 @@ function LiveMapView({ companyId, focusedVehicleId }) {
     ];
     return source.map((v) => {
       const vehicleGeofence = geofenceMap[v.id] || DEFAULT_GEOFENCE;
-      const [lat, lng]   = getVehicleCoordinates(v.id);
-      const dist         = haversineMeters(lat, lng, vehicleGeofence.lat, vehicleGeofence.lng);
-      const isBreaching  = dist > vehicleGeofence.radius;
+      const [lat, lng] = getVehicleCoordinates(v.id);
+      const dist       = haversineMeters(lat, lng, vehicleGeofence.lat, vehicleGeofence.lng);
+      const isBreaching = dist > vehicleGeofence.radius;
       return { ...v, lat, lng, dist, isBreaching, geofence: vehicleGeofence };
     });
   }, [vehicles, geofenceMap]);
@@ -1278,10 +1297,8 @@ function LiveMapView({ companyId, focusedVehicleId }) {
 
   const updateDraftField = (field, rawVal) => {
     if (field === "radius") {
-      // Backend enforces radius >= 50; clamp here so an in-progress edit
-      // (e.g. briefly empty while retyping) never produces an invalid 0.
       const parsed = parseInt(rawVal, 10);
-      const val = Number.isNaN(parsed) ? "" : parsed; // allow empty string while typing
+      const val = Number.isNaN(parsed) ? "" : parsed;
       setDraft((d) => ({ ...d, radius: val }));
       return;
     }
@@ -1291,16 +1308,10 @@ function LiveMapView({ companyId, focusedVehicleId }) {
 
   const saveGeofence = async () => {
     if (!selectedId) return;
-    // Clamp radius to the backend's minimum right before sending, regardless
-    // of what's currently in the input (covers the empty-string edit state).
-    const safeDraft = {
-      ...draft,
-      radius: Math.max(50, Number(draft.radius) || 50),
-    };
+    const safeDraft = { ...draft, radius: Math.max(50, Number(draft.radius) || 50) };
     setSaving(true); setSaveMsg("");
     try {
       const saved = await put(`/geofence/${selectedId}?companyId=${companyId}`, safeDraft);
-      // Response also comes back with decimal columns as strings — coerce here too.
       setGeofenceMap((prev) => ({
         ...prev,
         [selectedId]: {
@@ -1310,7 +1321,7 @@ function LiveMapView({ companyId, focusedVehicleId }) {
           radius: Number(saved.radius),
         },
       }));
-      setSaveMsg("Saved");
+      setSaveMsg("Saved ✓");
     } catch {
       setSaveMsg("Save failed — check backend");
     } finally {
@@ -1320,14 +1331,99 @@ function LiveMapView({ companyId, focusedVehicleId }) {
   };
 
   const resetToDefault = () => setDraft(DEFAULT_GEOFENCE);
-
   const selectedVehicle = displayVehicles.find((v) => v.id === selectedId);
+
+  const handleVehicleSelect = (id) => {
+    setSelectedId(id);
+    if (isMobile) setPanelOpen(true);
+  };
+
+  // Shared panel content used by both desktop overlay and mobile sheet
+  const GeofencePanelContent = () => (
+    <>
+      {isMobile && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.accent, boxShadow: `0 0 6px ${C.accent}` }} />
+            <span style={{ fontWeight: 700, fontSize: 13 }}>Geofence — {selectedVehicle?.plateNumber || "—"}</span>
+          </div>
+          <button
+            onClick={() => setPanelOpen(false)}
+            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", padding: "3px 10px", fontSize: 12 }}
+          >✕ Close</button>
+        </div>
+      )}
+      {!isMobile && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.accent, boxShadow: `0 0 6px ${C.accent}` }} />
+          <span style={{ fontWeight: 700, fontSize: 12 }}>Geofence Parameters</span>
+        </div>
+      )}
+
+      <Field label="Vehicle">
+        <select
+          style={{ ...styles.select, fontSize: 12, padding: "6px 9px" }}
+          value={selectedId || ""}
+          onChange={(e) => setSelectedId(Number(e.target.value))}
+        >
+          {displayVehicles.map((v) => (
+            <option key={v.id} value={v.id}>{v.plateNumber}</option>
+          ))}
+        </select>
+      </Field>
+
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr", gap: 8, marginTop: 8 }}>
+        <Field label="Center Latitude">
+          <input type="number" step="0.0001" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
+            value={draft.lat} onChange={(e) => updateDraftField("lat", e.target.value)} />
+        </Field>
+        <Field label="Center Longitude">
+          <input type="number" step="0.0001" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
+            value={draft.lng} onChange={(e) => updateDraftField("lng", e.target.value)} />
+        </Field>
+        <Field label="Zone Radius (Meters)">
+          <input type="number" step="50" min="100" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
+            value={draft.radius} onChange={(e) => updateDraftField("radius", e.target.value)} />
+        </Field>
+      </div>
+
+      {selectedVehicle && (
+        <div style={{
+          marginTop: 10, padding: "8px 10px", borderRadius: 7,
+          background: selectedVehicle.isBreaching ? "rgba(255,45,45,0.08)" : "rgba(34,197,94,0.07)",
+          border: `1px solid ${selectedVehicle.isBreaching ? "#7f0000" : "#166534"}`,
+        }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: selectedVehicle.isBreaching ? C.breach : C.success, marginBottom: 2 }}>
+            {selectedVehicle.isBreaching ? "⚠ THIS VEHICLE IS BREACHING" : "✓ THIS VEHICLE IS INSIDE ITS ZONE"}
+          </div>
+          <div style={{ fontSize: 10, color: C.muted }}>
+            {Math.round(selectedVehicle.dist).toLocaleString()} m from its geofence centre
+          </div>
+        </div>
+      )}
+
+      <button
+        style={{ ...styles.btn("primary"), width: "100%", marginTop: 10, justifyContent: "center", fontSize: 12, padding: "7px 0" }}
+        onClick={saveGeofence}
+        disabled={saving || !selectedId}
+      >
+        {saving ? "Saving…" : saveMsg || "Save Geofence"}
+      </button>
+      <button
+        style={{ ...styles.btn("secondary"), width: "100%", marginTop: 6, justifyContent: "center", fontSize: 11, padding: "6px 0" }}
+        onClick={resetToDefault}
+      >
+        <RotateCcw size={11} /> Reset Field to Default
+      </button>
+    </>
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.elevated, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {/* Status bar */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.elevated, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <Activity size={15} color={C.accent} />
           <span style={{ fontWeight: 600, fontSize: 14 }}>Live Telematics — Addis Ababa</span>
           <span style={{ fontSize: 10, background: "#052e16", color: C.success, border: `1px solid #166534`, borderRadius: 20, padding: "2px 8px", fontWeight: 600 }}>● LIVE</span>
@@ -1337,7 +1433,7 @@ function LiveMapView({ companyId, focusedVehicleId }) {
             </span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 16 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           {[["In-Zone", C.success, displayVehicles.filter((v) => !v.isBreaching && v.status !== "Maintenance").length],
             ["Maintenance", C.warning, displayVehicles.filter((v) => v.status === "Maintenance").length],
             ["Breaching",   C.breach,  breachCount]].map(([label, color, count]) => (
@@ -1346,9 +1442,15 @@ function LiveMapView({ companyId, focusedVehicleId }) {
             </div>
           ))}
         </div>
+        {isMobile && (
+          <div style={{ width: "100%", fontSize: 10, color: C.muted, textAlign: "center" }}>
+            Tap a vehicle pin or card below to edit its geofence
+          </div>
+        )}
       </div>
 
-      <div style={{ position: "relative", height: "calc(100vh - 220px)", minHeight: 420, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
+      {/* Map */}
+      <div style={{ position: "relative", height: isMobile ? "60vh" : "calc(100vh - 220px)", minHeight: 320, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
         <MapContainer center={[9.03, 38.74]} zoom={13} style={{ height: "100%", width: "100%", background: "#eef2f5" }}>
           <MapCameraController target={mapCenter} />
           <TileLayer
@@ -1358,7 +1460,6 @@ function LiveMapView({ companyId, focusedVehicleId }) {
             maxZoom={19}
           />
 
-          {/* One geofence circle per vehicle, since each vehicle now owns its own zone */}
           {displayVehicles.map((v) => (
             <Circle
               key={`geofence-${v.id}`}
@@ -1372,7 +1473,7 @@ function LiveMapView({ companyId, focusedVehicleId }) {
                 fillOpacity: v.id === selectedId ? 0.08 : 0.03,
                 dashArray: "8 5",
               }}
-              eventHandlers={{ click: () => setSelectedId(v.id) }}
+              eventHandlers={{ click: () => handleVehicleSelect(v.id) }}
             >
               <Popup>
                 <div style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 12, lineHeight: 1.7 }}>
@@ -1391,7 +1492,7 @@ function LiveMapView({ companyId, focusedVehicleId }) {
             const color = pinColor(v);
             return (
               <Marker key={v.id} position={[v.lat, v.lng]} icon={makeIcon(color, v.isBreaching)}
-                eventHandlers={{ click: () => setSelectedId(v.id) }}>
+                eventHandlers={{ click: () => handleVehicleSelect(v.id) }}>
                 <Popup minWidth={200}>
                   <div style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 12, lineHeight: 1.75 }}>
                     <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>🚛 {v.plateNumber}</div>
@@ -1407,6 +1508,14 @@ function LiveMapView({ companyId, focusedVehicleId }) {
                         ⚠ OUTSIDE OPERATIONAL BOUNDARY
                       </div>
                     )}
+                    {isMobile && (
+                      <button
+                        style={{ marginTop: 8, width: "100%", padding: "6px 0", borderRadius: 6, background: C.accent, color: "#fff", border: "none", fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+                        onClick={() => handleVehicleSelect(v.id)}
+                      >
+                        Edit Geofence
+                      </button>
+                    )}
                   </div>
                 </Popup>
               </Marker>
@@ -1414,86 +1523,27 @@ function LiveMapView({ companyId, focusedVehicleId }) {
           })}
         </MapContainer>
 
-        <div style={{
-          position: "absolute", top: 12, right: 12, zIndex: 1000, width: 240,
-          background: "rgba(22, 27, 34, 0.97)", border: `1px solid ${C.border}`,
-          borderRadius: 10, padding: "14px 14px 16px", backdropFilter: "blur(12px)",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
-            <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.accent, boxShadow: `0 0 6px ${C.accent}` }} />
-            <span style={{ fontWeight: 700, fontSize: 12 }}>Geofence Parameters</span>
+        {/* Desktop overlay — always visible on desktop */}
+        {!isMobile && (
+          <div style={{
+            position: "absolute", top: 12, right: 12, zIndex: 1000, width: 240,
+            background: "rgba(22, 27, 34, 0.97)", border: `1px solid ${C.border}`,
+            borderRadius: 10, padding: "14px 14px 16px", backdropFilter: "blur(12px)",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+          }}>
+            <GeofencePanelContent />
           </div>
-
-          <Field label="Vehicle">
-            <select
-              style={{ ...styles.select, fontSize: 12, padding: "6px 9px" }}
-              value={selectedId || ""}
-              onChange={(e) => setSelectedId(Number(e.target.value))}
-            >
-              {displayVehicles.map((v) => (
-                <option key={v.id} value={v.id}>{v.plateNumber}</option>
-              ))}
-            </select>
-          </Field>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-            <Field label="Center Latitude">
-              <input type="number" step="0.0001" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
-                value={draft.lat}
-                onChange={(e) => updateDraftField("lat", e.target.value)} />
-            </Field>
-            <Field label="Center Longitude">
-              <input type="number" step="0.0001" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
-                value={draft.lng}
-                onChange={(e) => updateDraftField("lng", e.target.value)} />
-            </Field>
-            <Field label="Zone Radius (Meters)">
-              <input type="number" step="50" min="100" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
-                value={draft.radius}
-                onChange={(e) => updateDraftField("radius", e.target.value)} />
-            </Field>
-          </div>
-
-          {selectedVehicle && (
-            <div style={{
-              marginTop: 10, padding: "8px 10px", borderRadius: 7,
-              background: selectedVehicle.isBreaching ? "rgba(255,45,45,0.08)" : "rgba(34,197,94,0.07)",
-              border: `1px solid ${selectedVehicle.isBreaching ? "#7f0000" : "#166534"}`,
-            }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: selectedVehicle.isBreaching ? C.breach : C.success, marginBottom: 2 }}>
-                {selectedVehicle.isBreaching ? "⚠ THIS VEHICLE IS BREACHING" : "✓ THIS VEHICLE IS INSIDE ITS ZONE"}
-              </div>
-              <div style={{ fontSize: 10, color: C.muted }}>
-                {Math.round(selectedVehicle.dist).toLocaleString()} m from its geofence centre
-              </div>
-            </div>
-          )}
-
-          <button
-            style={{ ...styles.btn("primary"), width: "100%", marginTop: 10, justifyContent: "center", fontSize: 12, padding: "7px 0" }}
-            onClick={saveGeofence}
-            disabled={saving || !selectedId}
-          >
-            {saving ? "Saving…" : saveMsg || "Save Geofence"}
-          </button>
-
-          <button
-            style={{ ...styles.btn("secondary"), width: "100%", marginTop: 6, justifyContent: "center", fontSize: 11, padding: "6px 0" }}
-            onClick={resetToDefault}
-          >
-            <RotateCcw size={11} /> Reset Field to Default
-          </button>
-        </div>
+        )}
       </div>
 
+      {/* Vehicle cards */}
       <div style={styles.grid4}>
         {displayVehicles.map((v) => {
           const color = pinColor(v);
           return (
             <div
               key={v.id}
-              onClick={() => setSelectedId(v.id)}
+              onClick={() => handleVehicleSelect(v.id)}
               style={{
                 ...styles.kpi,
                 cursor: "pointer",
@@ -1512,10 +1562,40 @@ function LiveMapView({ companyId, focusedVehicleId }) {
                 {Math.round(v.dist).toLocaleString()} m from its zone centre
               </div>
               {v.isBreaching && <div style={{ fontSize: 9, color: C.breach, fontWeight: 700, marginTop: 3 }}>⚠ OUTSIDE BOUNDARY</div>}
+              {isMobile && <div style={{ fontSize: 9, color: C.accent, marginTop: 4 }}>Tap to edit geofence →</div>}
             </div>
           );
         })}
       </div>
+
+      {/* Mobile bottom sheet */}
+      {isMobile && (
+        <>
+          {panelOpen && (
+            <div
+              onClick={() => setPanelOpen(false)}
+              style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.55)" }}
+            />
+          )}
+          <div style={{
+            position: "fixed",
+            bottom: 0, left: 0, right: 0,
+            zIndex: 1200,
+            background: C.surface,
+            border: `1px solid ${C.border}`,
+            borderRadius: "16px 16px 0 0",
+            padding: "16px 16px 32px",
+            boxShadow: "0 -8px 32px rgba(0,0,0,0.7)",
+            transform: panelOpen ? "translateY(0)" : "translateY(110%)",
+            transition: "transform 0.3s ease",
+            maxHeight: "80vh",
+            overflowY: "auto",
+          }}>
+            <div style={{ width: 36, height: 4, background: C.border, borderRadius: 2, margin: "0 auto 14px" }} />
+            <GeofencePanelContent />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1528,21 +1608,6 @@ export default function App() {
     return saved ? JSON.parse(saved) : null;
   } catch { return null; }
 });
-
-  // ── Mobile detection ──────────────────────────────────────────────────────
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
-  useEffect(() => {
-    const handler = () => setIsMobile(window.innerWidth <= 768);
-    window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
-  }, []);
-useEffect(() => {
-    registerUnauthorizedHandler(() => {
-      clearToken();
-      sessionStorage.removeItem("fleet_user");
-      setCurrentUser(null);
-    });
-  }, []);
   const [view,            setView]            = useState("dashboard");
   const [companies,       setCompanies]       = useState([]);
   const [activeCompanyId, setActiveCompanyId] = useState("");
@@ -1638,31 +1703,8 @@ const [showLanding, setShowLanding] = useState(
       `}</style>
 
       <div style={styles.app}>
-        {/* Dim overlay — only on mobile when sidebar is open */}
-        {isMobile && sideOpen && (
-          <div
-            onClick={() => setSideOpen(false)}
-            style={{
-              position: "fixed", inset: 0, zIndex: 999,
-              background: "rgba(0,0,0,0.55)",
-            }}
-          />
-        )}
-
-        <aside style={{
-          ...styles.sidebar,
-          ...(isMobile ? {
-            position: "fixed",
-            top: 0, left: 0,
-            height: "100vh",
-            zIndex: 1000,
-            transform: sideOpen ? "translateX(0)" : "translateX(-100%)",
-            transition: "transform 0.25s ease",
-            boxShadow: sideOpen ? "4px 0 24px rgba(0,0,0,0.7)" : "none",
-          } : {
-            display: sideOpen ? "flex" : "none",
-          }),
-        }}>
+        {sideOpen && (
+          <aside style={styles.sidebar}>
             <div style={styles.sidebarLogo}>
               <div style={styles.logoMark}><Activity size={15} color="#fff" /></div>
               <div>
@@ -1673,7 +1715,7 @@ const [showLanding, setShowLanding] = useState(
 
             <nav style={{ flex: 1, padding: "10px 0" }}>
               {visibleNavs.map(({ id, label, icon: Icon }) => (
-                <div key={id} style={styles.navItem(view === id)} onClick={() => { setFocusedVehicleId(null); setView(id); if (isMobile) setSideOpen(false); }}>
+                <div key={id} style={styles.navItem(view === id)} onClick={() => { setFocusedVehicleId(null); setView(id); }}>
                   <Icon size={15} />{label}
                 </div>
               ))}
@@ -1699,11 +1741,12 @@ const [showLanding, setShowLanding] = useState(
                   <div style={{ fontSize: 10, color: C.muted, textTransform: "capitalize" }}>{currentUser.role}</div>
                 </div>
               </div>
-              <button style={{ ...styles.btn("secondary"), width: "100%", justifyContent: "center", fontSize: 11, color: C.critical }} onClick={() => { clearToken(); sessionStorage.removeItem("fleet_user"); setCurrentUser(null); }}>
+              <button style={{ ...styles.btn("secondary"), width: "100%", justifyContent: "center", fontSize: 11, color: C.critical }} onClick={() => { sessionStorage.removeItem("fleet_user"); setCurrentUser(null); }}>
                 <LogOut size={12} /> Sign Out
               </button>
             </div>
           </aside>
+        )}
 
         <div style={styles.main}>
           <header style={styles.header}>
