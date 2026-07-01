@@ -728,17 +728,9 @@ function DashboardView({ companyId, onNavigateToMap }) {
 
       // Per-vehicle geofence lookup; vehicles with no saved geofence fall
       // back to a sensible default rather than skipping the breach check.
-      // NOTE: Postgres `decimal` columns are returned as strings over JSON,
-      // so lat/lng/radius are coerced to numbers here — once, at the source —
-      // so nothing downstream needs to know about the string/number distinction.
       const geofenceByVehicle = {};
       (Array.isArray(geofences) ? geofences : []).forEach((g) => {
-        geofenceByVehicle[g.vehicleId] = {
-          ...g,
-          lat: Number(g.lat),
-          lng: Number(g.lng),
-          radius: Number(g.radius),
-        };
+        geofenceByVehicle[g.vehicleId] = g;
       });
       const DEFAULT_GEOFENCE = { lat: 9.03, lng: 38.74, radius: 2000 };
 
@@ -1193,40 +1185,31 @@ function DriversView({ companyId }) {
 
 function makeIcon(color, isBreaching) {
   const pulse = isBreaching
-    ? `animation: breachPinPulse 0.9s ease-in-out infinite alternate; box-shadow: 0 0 0 4px ${color}55;`
-    : `box-shadow: 0 0 0 2px ${color}40;`;
-  // Truck glyph so vehicles read clearly at a glance instead of plain dots.
-  const truckSvg = `
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(45deg);">
-      <path d="M10 17h4V5H2v12h3"/>
-      <path d="M20 17h2v-3.34a4 4 0 0 0-1.17-2.83L19 9h-5v8h1"/>
-      <circle cx="7.5" cy="17.5" r="2.5"/>
-      <circle cx="17.5" cy="17.5" r="2.5"/>
-    </svg>`;
+    ? `animation: breachPinPulse 0.9s ease-in-out infinite alternate; box-shadow: 0 0 0 3px ${color}80;`
+    : `box-shadow: 0 0 0 2px ${color}60;`;
   return L.divIcon({
     className: "",
-    iconAnchor: [14, 32],
-    popupAnchor: [0, -34],
-    html: `<div style="display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.35));">
-      <div style="width:28px;height:28px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:${color};border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;${pulse}">
-        ${truckSvg}
-      </div>
+    iconAnchor: [12, 28],
+    popupAnchor: [0, -32],
+    html: `<div style="display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 2px 8px ${color}90);">
+      <div style="width:24px;height:24px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:${color};border:2.5px solid #fff;${pulse}"></div>
     </div>`,
   });
 }
 
 const DEFAULT_GEOFENCE = { lat: 9.03, lng: 38.74, radius: 2000 };
 
-
 function LiveMapView({ companyId, focusedVehicleId }) {
-  const [vehicles,    setVehicles]    = useState([]);
-  const [geofenceMap, setGeofenceMap] = useState({});
-  const [selectedId,  setSelectedId]  = useState(focusedVehicleId || null);
-  const [draft,       setDraft]       = useState(DEFAULT_GEOFENCE);
-  const [saving,      setSaving]      = useState(false);
-  const [saveMsg,     setSaveMsg]     = useState("");
-  const [panelOpen,   setPanelOpen]   = useState(false);
-  const isMobile = window.innerWidth <= 768;
+  const [vehicles,        setVehicles]        = useState([]);
+  const [geofenceMap,     setGeofenceMap]     = useState({}); // { [vehicleId]: { lat, lng, radius } }
+  const [selectedId,      setSelectedId]      = useState(focusedVehicleId || null);
+  const [draft,           setDraft]           = useState(DEFAULT_GEOFENCE);
+  const [saving,          setSaving]          = useState(false);
+  const [saveMsg,         setSaveMsg]         = useState("");
+  // On mobile the geofence panel is hidden by default and only opens when
+  // the user taps a vehicle marker or card — keeps the map fully visible.
+  const isMobileMap = window.innerWidth <= 768;
+  const [panelOpen, setPanelOpen] = useState(!isMobileMap);
 
   const loadVehiclesAndGeofences = useCallback(async () => {
     if (!companyId) return;
@@ -1237,26 +1220,23 @@ function LiveMapView({ companyId, focusedVehicleId }) {
       ]);
       setVehicles(Array.isArray(veh) ? veh : []);
       const map = {};
-      (Array.isArray(geofences) ? geofences : []).forEach((g) => {
-        map[g.vehicleId] = {
-          ...g,
-          lat: Number(g.lat),
-          lng: Number(g.lng),
-          radius: Number(g.radius),
-        };
-      });
+      (Array.isArray(geofences) ? geofences : []).forEach((g) => { map[g.vehicleId] = g; });
       setGeofenceMap(map);
     } catch {}
   }, [companyId]);
 
   useEffect(() => { loadVehiclesAndGeofences(); }, [loadVehiclesAndGeofences]);
 
+  // Default the editor's selected vehicle to the focused one, or the first
+  // vehicle in the list, once vehicles have loaded.
   useEffect(() => {
     if (selectedId) return;
     if (focusedVehicleId) { setSelectedId(focusedVehicleId); return; }
     if (vehicles.length > 0) setSelectedId(vehicles[0].id);
   }, [vehicles, focusedVehicleId, selectedId]);
 
+  // Sync the editable draft whenever the selected vehicle (or its saved
+  // geofence) changes.
   useEffect(() => {
     if (!selectedId) return;
     setDraft(geofenceMap[selectedId] || DEFAULT_GEOFENCE);
@@ -1274,9 +1254,9 @@ function LiveMapView({ companyId, focusedVehicleId }) {
     ];
     return source.map((v) => {
       const vehicleGeofence = geofenceMap[v.id] || DEFAULT_GEOFENCE;
-      const [lat, lng] = getVehicleCoordinates(v.id);
-      const dist       = haversineMeters(lat, lng, vehicleGeofence.lat, vehicleGeofence.lng);
-      const isBreaching = dist > vehicleGeofence.radius;
+      const [lat, lng]   = getVehicleCoordinates(v.id);
+      const dist         = haversineMeters(lat, lng, vehicleGeofence.lat, vehicleGeofence.lng);
+      const isBreaching  = dist > vehicleGeofence.radius;
       return { ...v, lat, lng, dist, isBreaching, geofence: vehicleGeofence };
     });
   }, [vehicles, geofenceMap]);
@@ -1296,32 +1276,17 @@ function LiveMapView({ companyId, focusedVehicleId }) {
   }
 
   const updateDraftField = (field, rawVal) => {
-    if (field === "radius") {
-      const parsed = parseInt(rawVal, 10);
-      const val = Number.isNaN(parsed) ? "" : parsed;
-      setDraft((d) => ({ ...d, radius: val }));
-      return;
-    }
-    const val = parseFloat(rawVal);
-    setDraft((d) => ({ ...d, [field]: Number.isNaN(val) ? d[field] : val }));
+    const val = field === "radius" ? parseInt(rawVal, 10) || 0 : parseFloat(rawVal) || 0;
+    setDraft((d) => ({ ...d, [field]: val }));
   };
 
   const saveGeofence = async () => {
     if (!selectedId) return;
-    const safeDraft = { ...draft, radius: Math.max(50, Number(draft.radius) || 50) };
     setSaving(true); setSaveMsg("");
     try {
-      const saved = await put(`/geofence/${selectedId}?companyId=${companyId}`, safeDraft);
-      setGeofenceMap((prev) => ({
-        ...prev,
-        [selectedId]: {
-          ...saved,
-          lat: Number(saved.lat),
-          lng: Number(saved.lng),
-          radius: Number(saved.radius),
-        },
-      }));
-      setSaveMsg("Saved ✓");
+      const saved = await put(`/geofence/${selectedId}?companyId=${companyId}`, draft);
+      setGeofenceMap((prev) => ({ ...prev, [selectedId]: saved }));
+      setSaveMsg("Saved");
     } catch {
       setSaveMsg("Save failed — check backend");
     } finally {
@@ -1331,99 +1296,14 @@ function LiveMapView({ companyId, focusedVehicleId }) {
   };
 
   const resetToDefault = () => setDraft(DEFAULT_GEOFENCE);
+
   const selectedVehicle = displayVehicles.find((v) => v.id === selectedId);
-
-  const handleVehicleSelect = (id) => {
-    setSelectedId(id);
-    if (isMobile) setPanelOpen(true);
-  };
-
-  // Shared panel content used by both desktop overlay and mobile sheet
-  const GeofencePanelContent = () => (
-    <>
-      {isMobile && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.accent, boxShadow: `0 0 6px ${C.accent}` }} />
-            <span style={{ fontWeight: 700, fontSize: 13 }}>Geofence — {selectedVehicle?.plateNumber || "—"}</span>
-          </div>
-          <button
-            onClick={() => setPanelOpen(false)}
-            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, cursor: "pointer", padding: "3px 10px", fontSize: 12 }}
-          >✕ Close</button>
-        </div>
-      )}
-      {!isMobile && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
-          <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.accent, boxShadow: `0 0 6px ${C.accent}` }} />
-          <span style={{ fontWeight: 700, fontSize: 12 }}>Geofence Parameters</span>
-        </div>
-      )}
-
-      <Field label="Vehicle">
-        <select
-          style={{ ...styles.select, fontSize: 12, padding: "6px 9px" }}
-          value={selectedId || ""}
-          onChange={(e) => setSelectedId(Number(e.target.value))}
-        >
-          {displayVehicles.map((v) => (
-            <option key={v.id} value={v.id}>{v.plateNumber}</option>
-          ))}
-        </select>
-      </Field>
-
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr", gap: 8, marginTop: 8 }}>
-        <Field label="Center Latitude">
-          <input type="number" step="0.0001" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
-            value={draft.lat} onChange={(e) => updateDraftField("lat", e.target.value)} />
-        </Field>
-        <Field label="Center Longitude">
-          <input type="number" step="0.0001" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
-            value={draft.lng} onChange={(e) => updateDraftField("lng", e.target.value)} />
-        </Field>
-        <Field label="Zone Radius (Meters)">
-          <input type="number" step="50" min="100" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
-            value={draft.radius} onChange={(e) => updateDraftField("radius", e.target.value)} />
-        </Field>
-      </div>
-
-      {selectedVehicle && (
-        <div style={{
-          marginTop: 10, padding: "8px 10px", borderRadius: 7,
-          background: selectedVehicle.isBreaching ? "rgba(255,45,45,0.08)" : "rgba(34,197,94,0.07)",
-          border: `1px solid ${selectedVehicle.isBreaching ? "#7f0000" : "#166534"}`,
-        }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: selectedVehicle.isBreaching ? C.breach : C.success, marginBottom: 2 }}>
-            {selectedVehicle.isBreaching ? "⚠ THIS VEHICLE IS BREACHING" : "✓ THIS VEHICLE IS INSIDE ITS ZONE"}
-          </div>
-          <div style={{ fontSize: 10, color: C.muted }}>
-            {Math.round(selectedVehicle.dist).toLocaleString()} m from its geofence centre
-          </div>
-        </div>
-      )}
-
-      <button
-        style={{ ...styles.btn("primary"), width: "100%", marginTop: 10, justifyContent: "center", fontSize: 12, padding: "7px 0" }}
-        onClick={saveGeofence}
-        disabled={saving || !selectedId}
-      >
-        {saving ? "Saving…" : saveMsg || "Save Geofence"}
-      </button>
-      <button
-        style={{ ...styles.btn("secondary"), width: "100%", marginTop: 6, justifyContent: "center", fontSize: 11, padding: "6px 0" }}
-        onClick={resetToDefault}
-      >
-        <RotateCcw size={11} /> Reset Field to Default
-      </button>
-    </>
-  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-      {/* Status bar */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.elevated, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.elevated, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Activity size={15} color={C.accent} />
           <span style={{ fontWeight: 600, fontSize: 14 }}>Live Telematics — Addis Ababa</span>
           <span style={{ fontSize: 10, background: "#052e16", color: C.success, border: `1px solid #166534`, borderRadius: 20, padding: "2px 8px", fontWeight: 600 }}>● LIVE</span>
@@ -1433,7 +1313,7 @@ function LiveMapView({ companyId, focusedVehicleId }) {
             </span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 16 }}>
           {[["In-Zone", C.success, displayVehicles.filter((v) => !v.isBreaching && v.status !== "Maintenance").length],
             ["Maintenance", C.warning, displayVehicles.filter((v) => v.status === "Maintenance").length],
             ["Breaching",   C.breach,  breachCount]].map(([label, color, count]) => (
@@ -1442,24 +1322,19 @@ function LiveMapView({ companyId, focusedVehicleId }) {
             </div>
           ))}
         </div>
-        {isMobile && (
-          <div style={{ width: "100%", fontSize: 10, color: C.muted, textAlign: "center" }}>
-            Tap a vehicle pin or card below to edit its geofence
-          </div>
-        )}
       </div>
 
-      {/* Map */}
-      <div style={{ position: "relative", height: isMobile ? "60vh" : "calc(100vh - 220px)", minHeight: 320, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
-        <MapContainer center={[9.03, 38.74]} zoom={13} style={{ height: "100%", width: "100%", background: "#eef2f5" }}>
+      <div style={{ position: "relative", height: "calc(100vh - 220px)", minHeight: 420, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
+        <MapContainer center={[9.03, 38.74]} zoom={13} style={{ height: "100%", width: "100%", background: "#0d1117" }}>
           <MapCameraController target={mapCenter} />
           <TileLayer
-            url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>'
             subdomains="abcd"
             maxZoom={19}
           />
 
+          {/* One geofence circle per vehicle, since each vehicle now owns its own zone */}
           {displayVehicles.map((v) => (
             <Circle
               key={`geofence-${v.id}`}
@@ -1473,13 +1348,11 @@ function LiveMapView({ companyId, focusedVehicleId }) {
                 fillOpacity: v.id === selectedId ? 0.08 : 0.03,
                 dashArray: "8 5",
               }}
-              eventHandlers={{ click: () => handleVehicleSelect(v.id) }}
-            >
-              <Popup>
+              eventHandlers={{ click: () => { setSelectedId(v.id); setPanelOpen(true); } }}
                 <div style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 12, lineHeight: 1.7 }}>
                   <strong style={{ color: C.accent }}>🏭 {v.plateNumber} — Geofence</strong><br />
-                  {Number(v.geofence.lat).toFixed(4)}°N, {Number(v.geofence.lng).toFixed(4)}°E<br />
-                  Radius: {Number(v.geofence.radius).toLocaleString()} m<br />
+                  {v.geofence.lat.toFixed(4)}°N, {v.geofence.lng.toFixed(4)}°E<br />
+                  Radius: {v.geofence.radius.toLocaleString()} m<br />
                   <span style={{ color: v.isBreaching ? C.breach : C.success, fontSize: 11 }}>
                     {v.isBreaching ? "⚠ Vehicle outside its boundary" : "✓ Vehicle inside its boundary"}
                   </span>
@@ -1492,7 +1365,7 @@ function LiveMapView({ companyId, focusedVehicleId }) {
             const color = pinColor(v);
             return (
               <Marker key={v.id} position={[v.lat, v.lng]} icon={makeIcon(color, v.isBreaching)}
-                eventHandlers={{ click: () => handleVehicleSelect(v.id) }}>
+                eventHandlers={{ click: () => { setSelectedId(v.id); setPanelOpen(true); } }}>
                 <Popup minWidth={200}>
                   <div style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 12, lineHeight: 1.75 }}>
                     <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>🚛 {v.plateNumber}</div>
@@ -1508,14 +1381,6 @@ function LiveMapView({ companyId, focusedVehicleId }) {
                         ⚠ OUTSIDE OPERATIONAL BOUNDARY
                       </div>
                     )}
-                    {isMobile && (
-                      <button
-                        style={{ marginTop: 8, width: "100%", padding: "6px 0", borderRadius: 6, background: C.accent, color: "#fff", border: "none", fontSize: 11, fontWeight: 600, cursor: "pointer" }}
-                        onClick={() => handleVehicleSelect(v.id)}
-                      >
-                        Edit Geofence
-                      </button>
-                    )}
                   </div>
                 </Popup>
               </Marker>
@@ -1523,27 +1388,108 @@ function LiveMapView({ companyId, focusedVehicleId }) {
           })}
         </MapContainer>
 
-        {/* Desktop overlay — always visible on desktop */}
-        {!isMobile && (
+        {/* On mobile the panel is hidden until user taps a vehicle.
+            On desktop it's always visible in the corner. */}
+        {panelOpen && (
+        <div style={{
+          position: "absolute", top: 12, right: 12, zIndex: 1000, width: 240,
+          background: "rgba(22, 27, 34, 0.97)", border: `1px solid ${C.border}`,
+          borderRadius: 10, padding: "14px 14px 16px", backdropFilter: "blur(12px)",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.accent, boxShadow: `0 0 6px ${C.accent}` }} />
+            <span style={{ fontWeight: 700, fontSize: 12, flex: 1 }}>Geofence Parameters</span>
+            {isMobileMap && (
+              <button
+                onClick={() => setPanelOpen(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 16, lineHeight: 1, padding: "0 2px" }}
+              >✕</button>
+            )}
+          </div>
+
+          <Field label="Vehicle">
+            <select
+              style={{ ...styles.select, fontSize: 12, padding: "6px 9px" }}
+              value={selectedId || ""}
+              onChange={(e) => setSelectedId(Number(e.target.value))}
+            >
+              {displayVehicles.map((v) => (
+                <option key={v.id} value={v.id}>{v.plateNumber}</option>
+              ))}
+            </select>
+          </Field>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+            <Field label="Center Latitude">
+              <input type="number" step="0.0001" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
+                value={draft.lat}
+                onChange={(e) => updateDraftField("lat", e.target.value)} />
+            </Field>
+            <Field label="Center Longitude">
+              <input type="number" step="0.0001" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
+                value={draft.lng}
+                onChange={(e) => updateDraftField("lng", e.target.value)} />
+            </Field>
+            <Field label="Zone Radius (Meters)">
+              <input type="number" step="50" min="100" style={{ ...styles.input, fontSize: 12, padding: "6px 9px" }}
+                value={draft.radius}
+                onChange={(e) => updateDraftField("radius", e.target.value)} />
+            </Field>
+          </div>
+
+          {selectedVehicle && (
+            <div style={{
+              marginTop: 10, padding: "8px 10px", borderRadius: 7,
+              background: selectedVehicle.isBreaching ? "rgba(255,45,45,0.08)" : "rgba(34,197,94,0.07)",
+              border: `1px solid ${selectedVehicle.isBreaching ? "#7f0000" : "#166534"}`,
+            }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: selectedVehicle.isBreaching ? C.breach : C.success, marginBottom: 2 }}>
+                {selectedVehicle.isBreaching ? "⚠ THIS VEHICLE IS BREACHING" : "✓ THIS VEHICLE IS INSIDE ITS ZONE"}
+              </div>
+              <div style={{ fontSize: 10, color: C.muted }}>
+                {Math.round(selectedVehicle.dist).toLocaleString()} m from its geofence centre
+              </div>
+            </div>
+          )}
+
+          <button
+            style={{ ...styles.btn("primary"), width: "100%", marginTop: 10, justifyContent: "center", fontSize: 12, padding: "7px 0" }}
+            onClick={saveGeofence}
+            disabled={saving || !selectedId}
+          >
+            {saving ? "Saving…" : saveMsg || "Save Geofence"}
+          </button>
+
+          <button
+            style={{ ...styles.btn("secondary"), width: "100%", marginTop: 6, justifyContent: "center", fontSize: 11, padding: "6px 0" }}
+            onClick={resetToDefault}
+          >
+            <RotateCcw size={11} /> Reset Field to Default
+          </button>
+        </div>
+        {/* On mobile: show a small floating hint when panel is closed */}
+        {isMobileMap && !panelOpen && (
           <div style={{
-            position: "absolute", top: 12, right: 12, zIndex: 1000, width: 240,
-            background: "rgba(22, 27, 34, 0.97)", border: `1px solid ${C.border}`,
-            borderRadius: 10, padding: "14px 14px 16px", backdropFilter: "blur(12px)",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+            position: "absolute", bottom: 16, right: 16, zIndex: 1000,
+            background: "rgba(22,27,34,0.95)", border: `1px solid ${C.border}`,
+            borderRadius: 20, padding: "7px 14px", fontSize: 11, fontWeight: 600,
+            color: C.muted, display: "flex", alignItems: "center", gap: 6,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
           }}>
-            <GeofencePanelContent />
+            🚛 Tap a vehicle to edit its geofence
           </div>
         )}
+        {/* end panelOpen */}
       </div>
 
-      {/* Vehicle cards */}
       <div style={styles.grid4}>
         {displayVehicles.map((v) => {
           const color = pinColor(v);
           return (
             <div
               key={v.id}
-              onClick={() => handleVehicleSelect(v.id)}
+              onClick={() => { setSelectedId(v.id); setPanelOpen(true); }}
               style={{
                 ...styles.kpi,
                 cursor: "pointer",
@@ -1562,40 +1508,10 @@ function LiveMapView({ companyId, focusedVehicleId }) {
                 {Math.round(v.dist).toLocaleString()} m from its zone centre
               </div>
               {v.isBreaching && <div style={{ fontSize: 9, color: C.breach, fontWeight: 700, marginTop: 3 }}>⚠ OUTSIDE BOUNDARY</div>}
-              {isMobile && <div style={{ fontSize: 9, color: C.accent, marginTop: 4 }}>Tap to edit geofence →</div>}
             </div>
           );
         })}
       </div>
-
-      {/* Mobile bottom sheet */}
-      {isMobile && (
-        <>
-          {panelOpen && (
-            <div
-              onClick={() => setPanelOpen(false)}
-              style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.55)" }}
-            />
-          )}
-          <div style={{
-            position: "fixed",
-            bottom: 0, left: 0, right: 0,
-            zIndex: 1200,
-            background: C.surface,
-            border: `1px solid ${C.border}`,
-            borderRadius: "16px 16px 0 0",
-            padding: "16px 16px 32px",
-            boxShadow: "0 -8px 32px rgba(0,0,0,0.7)",
-            transform: panelOpen ? "translateY(0)" : "translateY(110%)",
-            transition: "transform 0.3s ease",
-            maxHeight: "80vh",
-            overflowY: "auto",
-          }}>
-            <div style={{ width: 36, height: 4, background: C.border, borderRadius: 2, margin: "0 auto 14px" }} />
-            <GeofencePanelContent />
-          </div>
-        </>
-      )}
     </div>
   );
 }
@@ -1689,16 +1605,16 @@ const [showLanding, setShowLanding] = useState(
         input::placeholder { color: #484f58; }
         button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        .leaflet-container { background: #eef2f5 !important; font-family: 'Inter', system-ui, sans-serif; }
-        .leaflet-popup-content-wrapper { background: #ffffff !important; color: #1f2937 !important; border: 1px solid #d6dbe1 !important; border-radius: 10px !important; box-shadow: 0 4px 16px rgba(0,0,0,0.15) !important; }
-        .leaflet-popup-tip             { background: #ffffff !important; }
-        .leaflet-popup-close-button    { color: #6b7280 !important; }
-        .leaflet-popup-close-button:hover { color: #1f2937 !important; }
-        .leaflet-control-zoom a        { background: #ffffff !important; color: #1f2937 !important; border-color: #d6dbe1 !important; }
-        .leaflet-control-zoom a:hover  { background: #f3f4f6 !important; }
-        .leaflet-control-attribution   { background: rgba(255,255,255,0.8) !important; color: #6b7280 !important; font-size: 9px !important; }
+        .leaflet-container { background: #0d1117 !important; font-family: 'Inter', system-ui, sans-serif; }
+        .leaflet-popup-content-wrapper { background: #1c2330 !important; color: #e6edf3 !important; border: 1px solid #30363d !important; border-radius: 10px !important; box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important; }
+        .leaflet-popup-tip             { background: #1c2330 !important; }
+        .leaflet-popup-close-button    { color: #8b949e !important; }
+        .leaflet-popup-close-button:hover { color: #e6edf3 !important; }
+        .leaflet-control-zoom a        { background: #161b22 !important; color: #e6edf3 !important; border-color: #30363d !important; }
+        .leaflet-control-zoom a:hover  { background: #1c2330 !important; }
+        .leaflet-control-attribution   { background: rgba(13,17,23,0.75) !important; color: #484f58 !important; font-size: 9px !important; }
         .leaflet-control-attribution a { color: #3b82f6 !important; }
-        .leaflet-bar                   { border-color: #d6dbe1 !important; }
+        .leaflet-bar                   { border-color: #30363d !important; }
         .leaflet-popup-content         { margin: 10px 14px !important; }
       `}</style>
 
