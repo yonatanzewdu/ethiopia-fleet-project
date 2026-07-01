@@ -6,8 +6,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Plus, RefreshCw, Fuel, TrendingDown, DollarSign, Gauge } from "lucide-react";
-
-const API = "http://localhost:3000";
+import { get, post } from './api/client';
 
 const C = {
   bg: "#0d1117", surface: "#161b22", elevated: "#1c2330",
@@ -79,8 +78,8 @@ export default function FuelTab({ companyId, vehicles, onToast }) {
     if (!companyId) return;
     setLoading(true);
     Promise.all([
-      fetch(`${API}/fuel?companyId=${companyId}`).then((r) => r.json()),
-      fetch(`${API}/fuel/summary?companyId=${companyId}`).then((r) => r.json()),
+      get(`/fuel?companyId=${companyId}`),
+      get(`/fuel/summary?companyId=${companyId}`),
     ])
       .then(([logsData, summaryData]) => {
         setLogs(Array.isArray(logsData) ? logsData : []);
@@ -102,20 +101,15 @@ export default function FuelTab({ companyId, vehicles, onToast }) {
 
     setSaving(true);
     try {
-      const res = await fetch(`${API}/fuel`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vehicleId:      Number(form.vehicleId),
-          date:           form.date,
-          litres:         Number(form.litres),
-          pricePerLitre:  Number(form.pricePerLitre),
-          odometerReading: Number(form.odometerReading),
-          notes:          form.notes || undefined,
-          companyId:      Number(companyId),
-        }),
+      await post(`/fuel`, {
+        vehicleId:      Number(form.vehicleId),
+        date:           form.date,
+        litres:         Number(form.litres),
+        pricePerLitre:  Number(form.pricePerLitre),
+        odometerReading: Number(form.odometerReading),
+        notes:          form.notes || undefined,
+        companyId:      Number(companyId),
       });
-      if (!res.ok) throw new Error();
       onToast("Fuel fill-up logged.", "success");
       setForm(blank);
       load();
