@@ -5,6 +5,7 @@ import {
   ChevronRight, Eye, EyeOff, Fuel,
 } from "lucide-react";
 import FuelTab from './FuelTab';
+import { get, post, patch } from './api/client';
 
 const C = {
   bg:       "#0d1117",
@@ -19,8 +20,6 @@ const C = {
   success:  "#22c55e",
   info:     "#06b6d4",
 };
-
-const API = "http://localhost:3000";
 
 const CATEGORIES = [
   { value: "MAINTENANCE",  label: "Maintenance"  },
@@ -125,8 +124,7 @@ function PendingReceiptsTab({ companyId, vehicles, onToast }) {
   const load = useCallback(() => {
     if (!companyId) return;
     setLoading(true);
-    fetch(`${API}/financials/transactions?companyId=${companyId}&status=PENDING`)
-      .then((r) => r.json())
+    get(`/financials/transactions?companyId=${companyId}&status=PENDING`)
       .then((d) => setReceipts(Array.isArray(d) ? d : []))
       .catch(() => onToast("Could not load pending receipts.", "error"))
       .finally(() => setLoading(false));
@@ -137,15 +135,10 @@ function PendingReceiptsTab({ companyId, vehicles, onToast }) {
   const decide = async (id, newStatus) => {
     setActing(id);
     try {
-      const res = await fetch(
-        `${API}/financials/transactions/${id}/approval?companyId=${companyId}`,
-        {
-          method:  "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ approvalStatus: newStatus }),
-        }
+      await patch(
+        `/financials/transactions/${id}/approval?companyId=${companyId}`,
+        { approvalStatus: newStatus }
       );
-      if (!res.ok) throw new Error();
       onToast(`Receipt ${newStatus.toLowerCase()}.`, newStatus === "APPROVED" ? "success" : "error");
       setReceipts((prev) => prev.filter((r) => r.id !== id));
       if (expandId === id) setExpandId(null);
@@ -234,8 +227,7 @@ function MileageTab({ companyId, vehicles, onToast }) {
   const load = useCallback(() => {
     if (!companyId) return;
     setLoading(true);
-    fetch(`${API}/financials/mileage?companyId=${companyId}`)
-      .then((r) => r.json())
+    get(`/financials/mileage?companyId=${companyId}`)
       .then((d) => setLogs(Array.isArray(d) ? d : []))
       .catch(() => onToast("Could not load mileage logs.", "error"))
       .finally(() => setLoading(false));
@@ -250,17 +242,12 @@ function MileageTab({ companyId, vehicles, onToast }) {
     if (!form.odometerReading || Number(form.odometerReading) < 0) { onToast("Enter a valid odometer reading.", "error"); return; }
     setSaving(true);
     try {
-      const res = await fetch(`${API}/financials/mileage?companyId=${companyId}`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          vehicleId:       Number(form.vehicleId),
-          date:            form.date,
-          odometerReading: Number(form.odometerReading),
-          companyId:       Number(companyId),
-        }),
+      await post(`/financials/mileage?companyId=${companyId}`, {
+        vehicleId:       Number(form.vehicleId),
+        date:            form.date,
+        odometerReading: Number(form.odometerReading),
+        companyId:       Number(companyId),
       });
-      if (!res.ok) throw new Error();
       onToast("Odometer reading logged.", "success");
       setForm({ vehicleId: "", date: new Date().toISOString().slice(0, 10), odometerReading: "" });
       load();
@@ -345,8 +332,8 @@ function EfficiencyTab({ companyId, vehicles, onToast }) {
     if (!companyId) return;
     setLoading(true);
     Promise.all([
-      fetch(`${API}/financials/cpk?companyId=${companyId}`).then((r) => r.json()),
-      fetch(`${API}/financials/summary?companyId=${companyId}`).then((r) => r.json()),
+      get(`/financials/cpk?companyId=${companyId}`),
+      get(`/financials/summary?companyId=${companyId}`),
     ])
       .then(([cpk, summ]) => {
         setCpkData(Array.isArray(cpk)  ? cpk  : []);
@@ -454,8 +441,7 @@ function LogTransactionTab({ companyId, vehicles, onToast }) {
   const loadRecent = useCallback(() => {
     if (!companyId) return;
     setLoading(true);
-    fetch(`${API}/financials/transactions?companyId=${companyId}&status=APPROVED`)
-      .then((r) => r.json())
+    get(`/financials/transactions?companyId=${companyId}&status=APPROVED`)
       .then((d) => setRecent((Array.isArray(d) ? d : []).slice(0, 20)))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -469,19 +455,14 @@ function LogTransactionTab({ companyId, vehicles, onToast }) {
     setSaving(true);
     try {
       // companyId sent both in URL query param AND body for maximum compatibility
-      const res = await fetch(`${API}/financials/transactions?companyId=${companyId}`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          vehicleId:   form.vehicleId ? Number(form.vehicleId) : undefined,
-          category:    form.category,
-          amount:      Number(form.amount),
-          description: form.description || undefined,
-          date:        form.date,
-          companyId:   Number(companyId),
-        }),
+      await post(`/financials/transactions?companyId=${companyId}`, {
+        vehicleId:   form.vehicleId ? Number(form.vehicleId) : undefined,
+        category:    form.category,
+        amount:      Number(form.amount),
+        description: form.description || undefined,
+        date:        form.date,
+        companyId:   Number(companyId),
       });
-      if (!res.ok) throw new Error();
       onToast("Transaction logged.", "success");
       setForm(blank);
       loadRecent();
@@ -581,16 +562,14 @@ export default function ManagerFinancialsDashboard({ companyId, onToast }) {
 
   useEffect(() => {
     if (!companyId) return;
-    fetch(`${API}/vehicles?companyId=${companyId}`)
-      .then((r) => r.json())
+    get(`/vehicles?companyId=${companyId}`)
       .then((d) => setVehicles(Array.isArray(d) ? d : []))
       .catch(() => {});
   }, [companyId]);
 
   useEffect(() => {
     if (!companyId) return;
-    fetch(`${API}/financials/transactions?companyId=${companyId}&status=PENDING`)
-      .then((r) => r.json())
+    get(`/financials/transactions?companyId=${companyId}&status=PENDING`)
       .then((d) => setPendingCount(Array.isArray(d) ? d.length : 0))
       .catch(() => {});
   }, [companyId]);
