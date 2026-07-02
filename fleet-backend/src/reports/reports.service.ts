@@ -83,7 +83,29 @@ export class ReportsService {
     private readonly fuelRepo: Repository<FuelLog>,
   ) {}
 
-  // ── 1. FLEET EXPENSE BREAKDOWN (non-fuel approved transactions) ────────────
+  // ── INTERNAL: total fuel spend in date range ───────────────────────────────
+  private async getFuelTotalInRange(
+    companyId: number,
+    query: ReportsQueryDto,
+  ): Promise<number> {
+    const qb = this.fuelRepo
+      .createQueryBuilder('fl')
+      .select('COALESCE(SUM(fl.total_cost), 0)', 'total')
+      .where('fl.company_id = :companyId', { companyId })
+      .andWhere('fl.date BETWEEN :startDate AND :endDate', {
+        startDate: query.startDate,
+        endDate: query.endDate,
+      });
+
+    if (query.vehicleId) {
+      qb.andWhere('fl.vehicle_id = :vehicleId', { vehicleId: query.vehicleId });
+    }
+
+    const row = await qb.getRawOne<{ total: string }>();
+    return parseFloat(row?.total ?? '0');
+  }
+
+  // ── 1. FLEET EXPENSE BREAKDOWN ─────────────────────────────────────────────
   async getExpenseBreakdown(
     companyId: number,
     query: ReportsQueryDto,
@@ -110,7 +132,7 @@ export class ReportsService {
       total: parseFloat(r.total),
     }));
 
-    // Append fuel as its own category row so it shows up in the breakdown bar
+    // Append fuel as its own category so it appears in the breakdown bar chart
     const fuelTotal = await this.getFuelTotalInRange(companyId, query);
     if (fuelTotal > 0) {
       result.push({ category: 'fuel', total: fuelTotal });
@@ -119,39 +141,16 @@ export class ReportsService {
     return result;
   }
 
-  // ── INTERNAL: total fuel spend in date range ───────────────────────────────
-  private async getFuelTotalInRange(
-    companyId: number,
-    query: ReportsQueryDto,
-  ): Promise<number> {
-    // FuelLog uses snake_case column names in raw queries (confirmed from fuel.service.ts)
-    const qb = this.fuelRepo
-      .createQueryBuilder('fl')
-      .select('COALESCE(SUM(fl.total_cost), 0)', 'total')
-      .where('fl.company_id = :companyId', { companyId })
-      .andWhere('fl.date BETWEEN :startDate AND :endDate', {
-        startDate: query.startDate,
-        endDate: query.endDate,
-      });
-
-    if (query.vehicleId) {
-      qb.andWhere('fl.vehicle_id = :vehicleId', { vehicleId: query.vehicleId });
-    }
-
-    const row = await qb.getRawOne<{ total: string }>();
-    return parseFloat(row?.total ?? '0');
-  }
-
   // ── 2. FUEL SUMMARY REPORT ─────────────────────────────────────────────────
+  // NOTE: FuelLog has no vehicle relation, so we query vehicleId only.
+  // plateNumber is resolved on the frontend from the vehicles list it already holds.
   async getFuelSummaryReport(
     companyId: number,
     query: ReportsQueryDto,
   ): Promise<FuelSummaryReport> {
     const qb = this.fuelRepo
       .createQueryBuilder('fl')
-      .leftJoin('fl.vehicle', 'vehicle')
       .select('fl.vehicle_id', 'vehicleId')
-      .addSelect('vehicle.plateNumber', 'plateNumber')
       .addSelect('COALESCE(SUM(fl.total_cost), 0)',        'totalSpend')
       .addSelect('COALESCE(SUM(fl.litres), 0)',             'totalLitres')
       .addSelect('COALESCE(SUM(fl.km_since_last_fill), 0)', 'totalKm')
@@ -162,8 +161,7 @@ export class ReportsService {
         startDate: query.startDate,
         endDate: query.endDate,
       })
-      .groupBy('fl.vehicle_id')
-      .addGroupBy('vehicle.plateNumber');
+      .groupBy('fl.vehicle_id');
 
     if (query.vehicleId) {
       qb.andWhere('fl.vehicle_id = :vehicleId', { vehicleId: query.vehicleId });
@@ -171,7 +169,6 @@ export class ReportsService {
 
     const rows = await qb.getRawMany<{
       vehicleId: string;
-      plateNumber: string | null;
       totalSpend: string;
       totalLitres: string;
       totalKm: string;
@@ -179,9 +176,9 @@ export class ReportsService {
       avgPricePerLitre: string | null;
     }>();
 
-    const totalFuelSpend   = rows.reduce((a, r) => a + parseFloat(r.totalSpend  || '0'), 0);
-    const totalLitres      = rows.reduce((a, r) => a + parseFloat(r.totalLitres || '0'), 0);
-    const totalKm          = rows.reduce((a, r) => a + parseFloat(r.totalKm     || '0'), 0);
+    const totalFuelSpend    = rows.reduce((a, r) => a + parseFloat(r.totalSpend  || '0'), 0);
+    const totalLitres       = rows.reduce((a, r) => a + parseFloat(r.totalLitres || '0'), 0);
+    const totalKm           = rows.reduce((a, r) => a + parseFloat(r.totalKm     || '0'), 0);
     const avgLitresPer100km = totalKm > 0 ? parseFloat(((totalLitres / totalKm) * 100).toFixed(2)) : null;
     const avgPricePerLitre  = rows.length > 0
       ? parseFloat((rows.reduce((a, r) => a + parseFloat(r.avgPricePerLitre || '0'), 0) / rows.length).toFixed(2))
@@ -194,7 +191,7 @@ export class ReportsService {
       avgLitresPer100km,
       perVehicle: rows.map((r) => ({
         vehicleId:         Number(r.vehicleId),
-        plateNumber:       r.plateNumber ?? null,
+        plateNumber:       null, // resolved on frontend from vehicles list
         totalSpend:        parseFloat(r.totalSpend  || '0'),
         totalLitres:       parseFloat(r.totalLitres || '0'),
         totalKm:           parseFloat(r.totalKm     || '0'),
@@ -203,7 +200,7 @@ export class ReportsService {
     };
   }
 
-  // ── 3. CPK TREND (now includes fuel cost per period) ──────────────────────
+  // ── 3. CPK TREND (includes fuel cost per period) ──────────────────────────
   async getCpkTrend(companyId: number, query: ReportsQueryDto): Promise<CpkTrendPoint[]> {
     const granularity = (query as any).granularity ?? 'month';
     const bucket = granularity === 'week' ? 'week' : 'month';
@@ -261,8 +258,8 @@ export class ReportsService {
     const toKey = (p: Date | string) =>
       (p instanceof Date ? p : new Date(p)).toISOString().slice(0, 10);
 
-    const expenseByPeriod = new Map(expenseRows.map((r) => [toKey(r.period), parseFloat(r.total)]));
-    const fuelByPeriod    = new Map(fuelRows.map((r) => [toKey(r.period), parseFloat(r.total)]));
+    const expenseByPeriod  = new Map(expenseRows.map((r) => [toKey(r.period), parseFloat(r.total)]));
+    const fuelByPeriod     = new Map(fuelRows.map((r) => [toKey(r.period), parseFloat(r.total)]));
     const distanceByPeriod = new Map(distanceRows.map((r) => [toKey(r.period), parseFloat(r.total)]));
 
     const allPeriods = Array.from(
@@ -288,7 +285,7 @@ export class ReportsService {
     });
   }
 
-  // ── 4. ASSET UTILIZATION (unchanged) ──────────────────────────────────────
+  // ── 4. ASSET UTILIZATION ──────────────────────────────────────────────────
   async getAssetUtilization(
     companyId: number,
     query: ReportsQueryDto,
@@ -325,7 +322,7 @@ export class ReportsService {
     }));
   }
 
-  // ── 5. VEHICLE COMPARISON (now includes fuel cost column) ─────────────────
+  // ── 5. VEHICLE COMPARISON (fuel + non-fuel, no fl.vehicle join) ───────────
   async getVehicleComparison(
     companyId: number,
     query: ReportsQueryDto,
@@ -348,19 +345,17 @@ export class ReportsService {
       .addGroupBy('vehicle.plateNumber')
       .addGroupBy('vehicle.model');
 
+    // FuelLog has no vehicle relation — group by vehicleId only
     const fuelByVehicleQb = this.fuelRepo
       .createQueryBuilder('fl')
-      .leftJoin('fl.vehicle', 'vehicle')
       .select('fl.vehicle_id', 'vehicleId')
-      .addSelect('vehicle.plateNumber', 'plateNumber')
       .addSelect('COALESCE(SUM(fl.total_cost), 0)', 'totalFuelCost')
       .where('fl.company_id = :companyId', { companyId })
       .andWhere('fl.date BETWEEN :startDate AND :endDate', {
         startDate: query.startDate,
         endDate: query.endDate,
       })
-      .groupBy('fl.vehicle_id')
-      .addGroupBy('vehicle.plateNumber');
+      .groupBy('fl.vehicle_id');
 
     if (query.vehicleId) {
       expenseQb.andWhere('ft.vehicleId = :vehicleId', { vehicleId: query.vehicleId });
@@ -369,7 +364,7 @@ export class ReportsService {
 
     const [expenseRows, fuelRows, utilizationRows] = await Promise.all([
       expenseQb.getRawMany<{ vehicleId: string; plateNumber: string | null; model: string | null; total: string }>(),
-      fuelByVehicleQb.getRawMany<{ vehicleId: string; plateNumber: string | null; totalFuelCost: string }>(),
+      fuelByVehicleQb.getRawMany<{ vehicleId: string; totalFuelCost: string }>(),
       this.getAssetUtilization(companyId, query),
     ]);
 
@@ -382,10 +377,7 @@ export class ReportsService {
     );
 
     const fuelCostByVehicle = new Map(
-      fuelRows.map((r) => [Number(r.vehicleId), {
-        totalFuelCost: parseFloat(r.totalFuelCost),
-        plateNumber: r.plateNumber,
-      }]),
+      fuelRows.map((r) => [Number(r.vehicleId), parseFloat(r.totalFuelCost)]),
     );
 
     const vehicleIds = new Set<number>([
@@ -397,14 +389,13 @@ export class ReportsService {
     return Array.from(vehicleIds).map((vid) => {
       const utilization      = utilizationRows.find((r) => r.vehicleId === vid);
       const costEntry        = costByVehicle.get(vid);
-      const fuelEntry        = fuelCostByVehicle.get(vid);
       const totalApprovedCost    = costEntry?.total ?? 0;
-      const totalFuelCost        = fuelEntry?.totalFuelCost ?? 0;
+      const totalFuelCost        = fuelCostByVehicle.get(vid) ?? 0;
       const totalCost            = totalApprovedCost + totalFuelCost;
       const totalDistanceCovered = utilization?.totalDistanceCovered ?? 0;
       return {
         vehicleId: vid,
-        plateNumber: costEntry?.plateNumber ?? fuelEntry?.plateNumber ?? utilization?.plateNumber ?? null,
+        plateNumber: costEntry?.plateNumber ?? utilization?.plateNumber ?? null,
         model: costEntry?.model ?? null,
         totalDistanceCovered,
         totalApprovedCost,
@@ -431,8 +422,8 @@ export class ReportsService {
       .filter((r) => r.category !== 'fuel')
       .reduce((s, r) => s + r.total, 0);
 
-    const totalFuelSpend     = fuelSummary.totalFuelSpend;
-    const totalCombinedSpend = cumulativeCompanySpend + totalFuelSpend;
+    const totalFuelSpend      = fuelSummary.totalFuelSpend;
+    const totalCombinedSpend  = cumulativeCompanySpend + totalFuelSpend;
     const totalDistanceLogged = vehicleComparison.reduce((s, r) => s + r.totalDistanceCovered, 0);
     const averageFleetEfficiency =
       totalDistanceLogged > 0
