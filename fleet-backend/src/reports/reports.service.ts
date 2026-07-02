@@ -7,16 +7,19 @@ import {
   TransactionCategory,
 } from '../financials/entities/financial-transaction.entity';
 import { MileageLog } from '../financials/entities/mileage-log.entity';
+import { FuelLog } from '../fuel/entities/fuel-log.entity';
 import { ReportsQueryDto } from './dto/reports-query.dto';
 
 export interface ExpenseBreakdownRow {
-  category: TransactionCategory;
+  category: TransactionCategory | 'fuel';
   total: number;
 }
 
 export interface CpkTrendPoint {
   period: string;
   totalApprovedExpenses: number;
+  fuelCost: number;
+  totalCost: number;
   totalDistanceCovered: number;
   costPerKilometer: number | null;
 }
@@ -33,16 +36,38 @@ export interface VehicleComparisonRow {
   model: string | null;
   totalDistanceCovered: number;
   totalApprovedCost: number;
+  totalFuelCost: number;
+  totalCost: number;
   costPerKilometer: number | null;
+}
+
+export interface FuelSummaryReport {
+  totalFuelSpend: number;
+  totalLitres: number;
+  avgPricePerLitre: number | null;
+  avgLitresPer100km: number | null;
+  perVehicle: Array<{
+    vehicleId: number;
+    plateNumber: string | null;
+    totalSpend: number;
+    totalLitres: number;
+    totalKm: number;
+    avgLitresPer100km: number | null;
+  }>;
 }
 
 export interface ReportsDashboard {
   kpis: {
     cumulativeCompanySpend: number;
+    totalFuelSpend: number;
+    totalCombinedSpend: number;
     totalDistanceLogged: number;
     averageFleetEfficiency: number | null;
+    avgFuelPricePerLitre: number | null;
+    avgLitresPer100km: number | null;
   };
   expenseBreakdown: ExpenseBreakdownRow[];
+  fuelSummary: FuelSummaryReport;
   cpkTrend: CpkTrendPoint[];
   vehicleComparison: VehicleComparisonRow[];
 }
@@ -54,12 +79,11 @@ export class ReportsService {
     private readonly finRepo: Repository<FinancialTransaction>,
     @InjectRepository(MileageLog)
     private readonly mileageRepo: Repository<MileageLog>,
+    @InjectRepository(FuelLog)
+    private readonly fuelRepo: Repository<FuelLog>,
   ) {}
 
-  // ── 1. FLEET EXPENSE BREAKDOWN ─────────────────────────────────────────────
-  // FIX: use camelCase property names (companyId, approvalStatus, vehicleId)
-  // not snake_case DB column names. TypeORM QueryBuilder always uses the
-  // TypeScript property name defined in the @Column() decorator.
+  // ── 1. FLEET EXPENSE BREAKDOWN (non-fuel approved transactions) ────────────
   async getExpenseBreakdown(
     companyId: number,
     query: ReportsQueryDto,
@@ -68,7 +92,6 @@ export class ReportsService {
       .createQueryBuilder('ft')
       .select('ft.category', 'category')
       .addSelect('COALESCE(SUM(ft.amount), 0)', 'total')
-      // FIXED: was 'ft.company_id' — must be the entity property name
       .where('ft.companyId = :companyId', { companyId })
       .andWhere('ft.approvalStatus = :approved', { approved: ApprovalStatus.APPROVED })
       .andWhere('ft.date BETWEEN :startDate AND :endDate', {
@@ -78,15 +101,109 @@ export class ReportsService {
       .groupBy('ft.category');
 
     if (query.vehicleId) {
-      // FIXED: was 'ft.vehicle_id'
       qb.andWhere('ft.vehicleId = :vehicleId', { vehicleId: query.vehicleId });
     }
 
     const rows = await qb.getRawMany<{ category: TransactionCategory; total: string }>();
-    return rows.map((r) => ({ category: r.category, total: parseFloat(r.total) }));
+    const result: ExpenseBreakdownRow[] = rows.map((r) => ({
+      category: r.category,
+      total: parseFloat(r.total),
+    }));
+
+    // Append fuel as its own category row so it shows up in the breakdown bar
+    const fuelTotal = await this.getFuelTotalInRange(companyId, query);
+    if (fuelTotal > 0) {
+      result.push({ category: 'fuel', total: fuelTotal });
+    }
+
+    return result;
   }
 
-  // ── 2. CPK TREND OVER TIME ─────────────────────────────────────────────────
+  // ── INTERNAL: total fuel spend in date range ───────────────────────────────
+  private async getFuelTotalInRange(
+    companyId: number,
+    query: ReportsQueryDto,
+  ): Promise<number> {
+    // FuelLog uses snake_case column names in raw queries (confirmed from fuel.service.ts)
+    const qb = this.fuelRepo
+      .createQueryBuilder('fl')
+      .select('COALESCE(SUM(fl.total_cost), 0)', 'total')
+      .where('fl.company_id = :companyId', { companyId })
+      .andWhere('fl.date BETWEEN :startDate AND :endDate', {
+        startDate: query.startDate,
+        endDate: query.endDate,
+      });
+
+    if (query.vehicleId) {
+      qb.andWhere('fl.vehicle_id = :vehicleId', { vehicleId: query.vehicleId });
+    }
+
+    const row = await qb.getRawOne<{ total: string }>();
+    return parseFloat(row?.total ?? '0');
+  }
+
+  // ── 2. FUEL SUMMARY REPORT ─────────────────────────────────────────────────
+  async getFuelSummaryReport(
+    companyId: number,
+    query: ReportsQueryDto,
+  ): Promise<FuelSummaryReport> {
+    const qb = this.fuelRepo
+      .createQueryBuilder('fl')
+      .leftJoin('fl.vehicle', 'vehicle')
+      .select('fl.vehicle_id', 'vehicleId')
+      .addSelect('vehicle.plateNumber', 'plateNumber')
+      .addSelect('COALESCE(SUM(fl.total_cost), 0)',        'totalSpend')
+      .addSelect('COALESCE(SUM(fl.litres), 0)',             'totalLitres')
+      .addSelect('COALESCE(SUM(fl.km_since_last_fill), 0)', 'totalKm')
+      .addSelect('AVG(fl.litres_per_100km)',                'avgLitresPer100km')
+      .addSelect('AVG(fl.price_per_litre)',                 'avgPricePerLitre')
+      .where('fl.company_id = :companyId', { companyId })
+      .andWhere('fl.date BETWEEN :startDate AND :endDate', {
+        startDate: query.startDate,
+        endDate: query.endDate,
+      })
+      .groupBy('fl.vehicle_id')
+      .addGroupBy('vehicle.plateNumber');
+
+    if (query.vehicleId) {
+      qb.andWhere('fl.vehicle_id = :vehicleId', { vehicleId: query.vehicleId });
+    }
+
+    const rows = await qb.getRawMany<{
+      vehicleId: string;
+      plateNumber: string | null;
+      totalSpend: string;
+      totalLitres: string;
+      totalKm: string;
+      avgLitresPer100km: string | null;
+      avgPricePerLitre: string | null;
+    }>();
+
+    const totalFuelSpend   = rows.reduce((a, r) => a + parseFloat(r.totalSpend  || '0'), 0);
+    const totalLitres      = rows.reduce((a, r) => a + parseFloat(r.totalLitres || '0'), 0);
+    const totalKm          = rows.reduce((a, r) => a + parseFloat(r.totalKm     || '0'), 0);
+    const avgLitresPer100km = totalKm > 0 ? parseFloat(((totalLitres / totalKm) * 100).toFixed(2)) : null;
+    const avgPricePerLitre  = rows.length > 0
+      ? parseFloat((rows.reduce((a, r) => a + parseFloat(r.avgPricePerLitre || '0'), 0) / rows.length).toFixed(2))
+      : null;
+
+    return {
+      totalFuelSpend,
+      totalLitres,
+      avgPricePerLitre,
+      avgLitresPer100km,
+      perVehicle: rows.map((r) => ({
+        vehicleId:         Number(r.vehicleId),
+        plateNumber:       r.plateNumber ?? null,
+        totalSpend:        parseFloat(r.totalSpend  || '0'),
+        totalLitres:       parseFloat(r.totalLitres || '0'),
+        totalKm:           parseFloat(r.totalKm     || '0'),
+        avgLitresPer100km: r.avgLitresPer100km ? parseFloat(r.avgLitresPer100km) : null,
+      })),
+    };
+  }
+
+  // ── 3. CPK TREND (now includes fuel cost per period) ──────────────────────
   async getCpkTrend(companyId: number, query: ReportsQueryDto): Promise<CpkTrendPoint[]> {
     const granularity = (query as any).granularity ?? 'month';
     const bucket = granularity === 'week' ? 'week' : 'month';
@@ -95,7 +212,6 @@ export class ReportsService {
       .createQueryBuilder('ft')
       .select(`date_trunc('${bucket}', ft.date::timestamp)`, 'period')
       .addSelect('COALESCE(SUM(ft.amount), 0)', 'total')
-      // FIXED: camelCase property names throughout
       .where('ft.companyId = :companyId', { companyId })
       .andWhere('ft.approvalStatus = :approved', { approved: ApprovalStatus.APPROVED })
       .andWhere('ft.date BETWEEN :startDate AND :endDate', {
@@ -105,12 +221,22 @@ export class ReportsService {
       .groupBy('period')
       .orderBy('period', 'ASC');
 
+    const fuelQb = this.fuelRepo
+      .createQueryBuilder('fl')
+      .select(`date_trunc('${bucket}', fl.date::timestamp)`, 'period')
+      .addSelect('COALESCE(SUM(fl.total_cost), 0)', 'total')
+      .where('fl.company_id = :companyId', { companyId })
+      .andWhere('fl.date BETWEEN :startDate AND :endDate', {
+        startDate: query.startDate,
+        endDate: query.endDate,
+      })
+      .groupBy('period')
+      .orderBy('period', 'ASC');
+
     const distanceQb = this.mileageRepo
       .createQueryBuilder('ml')
       .select(`date_trunc('${bucket}', ml.date::timestamp)`, 'period')
-      // FIXED: was 'ml.distance_covered' — must match MileageLog entity property
       .addSelect('COALESCE(SUM(ml.distanceCovered), 0)', 'total')
-      // FIXED: was 'ml.company_id'
       .where('ml.companyId = :companyId', { companyId })
       .andWhere('ml.date BETWEEN :startDate AND :endDate', {
         startDate: query.startDate,
@@ -121,47 +247,48 @@ export class ReportsService {
       .orderBy('period', 'ASC');
 
     if (query.vehicleId) {
-      // FIXED: was 'ft.vehicle_id' and 'ml.vehicle_id'
       expenseQb.andWhere('ft.vehicleId = :vehicleId', { vehicleId: query.vehicleId });
+      fuelQb.andWhere('fl.vehicle_id = :vehicleId', { vehicleId: query.vehicleId });
       distanceQb.andWhere('ml.vehicleId = :vehicleId', { vehicleId: query.vehicleId });
     }
 
-    const [expenseRows, distanceRows] = await Promise.all([
+    const [expenseRows, fuelRows, distanceRows] = await Promise.all([
       expenseQb.getRawMany<{ period: Date | string; total: string }>(),
+      fuelQb.getRawMany<{ period: Date | string; total: string }>(),
       distanceQb.getRawMany<{ period: Date | string; total: string }>(),
     ]);
 
-    // Normalise period to 'YYYY-MM-DD' string regardless of what Postgres returns
     const toKey = (p: Date | string) =>
       (p instanceof Date ? p : new Date(p)).toISOString().slice(0, 10);
 
-    const expenseByPeriod = new Map<string, number>(
-      expenseRows.map((r) => [toKey(r.period), parseFloat(r.total)]),
-    );
-    const distanceByPeriod = new Map<string, number>(
-      distanceRows.map((r) => [toKey(r.period), parseFloat(r.total)]),
-    );
+    const expenseByPeriod = new Map(expenseRows.map((r) => [toKey(r.period), parseFloat(r.total)]));
+    const fuelByPeriod    = new Map(fuelRows.map((r) => [toKey(r.period), parseFloat(r.total)]));
+    const distanceByPeriod = new Map(distanceRows.map((r) => [toKey(r.period), parseFloat(r.total)]));
 
     const allPeriods = Array.from(
-      new Set([...expenseByPeriod.keys(), ...distanceByPeriod.keys()]),
+      new Set([...expenseByPeriod.keys(), ...fuelByPeriod.keys(), ...distanceByPeriod.keys()]),
     ).sort();
 
     return allPeriods.map((period) => {
       const totalApprovedExpenses = expenseByPeriod.get(period) ?? 0;
+      const fuelCost              = fuelByPeriod.get(period) ?? 0;
+      const totalCost             = totalApprovedExpenses + fuelCost;
       const totalDistanceCovered  = distanceByPeriod.get(period) ?? 0;
       return {
         period,
         totalApprovedExpenses,
+        fuelCost,
+        totalCost,
         totalDistanceCovered,
         costPerKilometer:
           totalDistanceCovered > 0
-            ? parseFloat((totalApprovedExpenses / totalDistanceCovered).toFixed(4))
+            ? parseFloat((totalCost / totalDistanceCovered).toFixed(4))
             : null,
       };
     });
   }
 
-  // ── 3. ASSET UTILIZATION & MILEAGE ────────────────────────────────────────
+  // ── 4. ASSET UTILIZATION (unchanged) ──────────────────────────────────────
   async getAssetUtilization(
     companyId: number,
     query: ReportsQueryDto,
@@ -169,11 +296,9 @@ export class ReportsService {
     const qb = this.mileageRepo
       .createQueryBuilder('ml')
       .leftJoin('ml.vehicle', 'vehicle')
-      // FIXED: was 'ml.vehicle_id' — use property name 'vehicleId'
       .select('ml.vehicleId', 'vehicleId')
       .addSelect('vehicle.plateNumber', 'plateNumber')
       .addSelect('COALESCE(SUM(ml.distanceCovered), 0)', 'totalDistanceCovered')
-      // FIXED: was 'ml.company_id'
       .where('ml.companyId = :companyId', { companyId })
       .andWhere('ml.date BETWEEN :startDate AND :endDate', {
         startDate: query.startDate,
@@ -200,7 +325,7 @@ export class ReportsService {
     }));
   }
 
-  // ── 4. VEHICLE COMPARISON TABLE ───────────────────────────────────────────
+  // ── 5. VEHICLE COMPARISON (now includes fuel cost column) ─────────────────
   async getVehicleComparison(
     companyId: number,
     query: ReportsQueryDto,
@@ -208,12 +333,10 @@ export class ReportsService {
     const expenseQb = this.finRepo
       .createQueryBuilder('ft')
       .leftJoin('ft.vehicle', 'vehicle')
-      // FIXED: was 'ft.vehicle_id'
       .select('ft.vehicleId', 'vehicleId')
       .addSelect('vehicle.plateNumber', 'plateNumber')
       .addSelect('vehicle.model', 'model')
       .addSelect('COALESCE(SUM(ft.amount), 0)', 'total')
-      // FIXED: was 'ft.company_id'
       .where('ft.companyId = :companyId', { companyId })
       .andWhere('ft.approvalStatus = :approved', { approved: ApprovalStatus.APPROVED })
       .andWhere('ft.date BETWEEN :startDate AND :endDate', {
@@ -225,17 +348,28 @@ export class ReportsService {
       .addGroupBy('vehicle.plateNumber')
       .addGroupBy('vehicle.model');
 
+    const fuelByVehicleQb = this.fuelRepo
+      .createQueryBuilder('fl')
+      .leftJoin('fl.vehicle', 'vehicle')
+      .select('fl.vehicle_id', 'vehicleId')
+      .addSelect('vehicle.plateNumber', 'plateNumber')
+      .addSelect('COALESCE(SUM(fl.total_cost), 0)', 'totalFuelCost')
+      .where('fl.company_id = :companyId', { companyId })
+      .andWhere('fl.date BETWEEN :startDate AND :endDate', {
+        startDate: query.startDate,
+        endDate: query.endDate,
+      })
+      .groupBy('fl.vehicle_id')
+      .addGroupBy('vehicle.plateNumber');
+
     if (query.vehicleId) {
       expenseQb.andWhere('ft.vehicleId = :vehicleId', { vehicleId: query.vehicleId });
+      fuelByVehicleQb.andWhere('fl.vehicle_id = :vehicleId', { vehicleId: query.vehicleId });
     }
 
-    const [expenseRows, utilizationRows] = await Promise.all([
-      expenseQb.getRawMany<{
-        vehicleId: string;
-        plateNumber: string | null;
-        model: string | null;
-        total: string;
-      }>(),
+    const [expenseRows, fuelRows, utilizationRows] = await Promise.all([
+      expenseQb.getRawMany<{ vehicleId: string; plateNumber: string | null; model: string | null; total: string }>(),
+      fuelByVehicleQb.getRawMany<{ vehicleId: string; plateNumber: string | null; totalFuelCost: string }>(),
       this.getAssetUtilization(companyId, query),
     ]);
 
@@ -247,25 +381,38 @@ export class ReportsService {
       }]),
     );
 
+    const fuelCostByVehicle = new Map(
+      fuelRows.map((r) => [Number(r.vehicleId), {
+        totalFuelCost: parseFloat(r.totalFuelCost),
+        plateNumber: r.plateNumber,
+      }]),
+    );
+
     const vehicleIds = new Set<number>([
       ...costByVehicle.keys(),
+      ...fuelCostByVehicle.keys(),
       ...utilizationRows.map((r) => r.vehicleId),
     ]);
 
     return Array.from(vehicleIds).map((vid) => {
-      const utilization    = utilizationRows.find((r) => r.vehicleId === vid);
-      const costEntry      = costByVehicle.get(vid);
-      const totalApprovedCost      = costEntry?.total ?? 0;
-      const totalDistanceCovered   = utilization?.totalDistanceCovered ?? 0;
+      const utilization      = utilizationRows.find((r) => r.vehicleId === vid);
+      const costEntry        = costByVehicle.get(vid);
+      const fuelEntry        = fuelCostByVehicle.get(vid);
+      const totalApprovedCost    = costEntry?.total ?? 0;
+      const totalFuelCost        = fuelEntry?.totalFuelCost ?? 0;
+      const totalCost            = totalApprovedCost + totalFuelCost;
+      const totalDistanceCovered = utilization?.totalDistanceCovered ?? 0;
       return {
-        vehicleId:            vid,
-        plateNumber:          costEntry?.plateNumber ?? utilization?.plateNumber ?? null,
-        model:                costEntry?.model ?? null,
+        vehicleId: vid,
+        plateNumber: costEntry?.plateNumber ?? fuelEntry?.plateNumber ?? utilization?.plateNumber ?? null,
+        model: costEntry?.model ?? null,
         totalDistanceCovered,
         totalApprovedCost,
+        totalFuelCost,
+        totalCost,
         costPerKilometer:
           totalDistanceCovered > 0
-            ? parseFloat((totalApprovedCost / totalDistanceCovered).toFixed(4))
+            ? parseFloat((totalCost / totalDistanceCovered).toFixed(4))
             : null,
       };
     });
@@ -273,22 +420,37 @@ export class ReportsService {
 
   // ── COMBINED DASHBOARD ────────────────────────────────────────────────────
   async getDashboard(companyId: number, query: ReportsQueryDto): Promise<ReportsDashboard> {
-    const [expenseBreakdown, cpkTrend, vehicleComparison] = await Promise.all([
+    const [expenseBreakdown, fuelSummary, cpkTrend, vehicleComparison] = await Promise.all([
       this.getExpenseBreakdown(companyId, query),
+      this.getFuelSummaryReport(companyId, query),
       this.getCpkTrend(companyId, query),
       this.getVehicleComparison(companyId, query),
     ]);
 
-    const cumulativeCompanySpend = expenseBreakdown.reduce((s, r) => s + r.total, 0);
-    const totalDistanceLogged    = vehicleComparison.reduce((s, r) => s + r.totalDistanceCovered, 0);
+    const cumulativeCompanySpend = expenseBreakdown
+      .filter((r) => r.category !== 'fuel')
+      .reduce((s, r) => s + r.total, 0);
+
+    const totalFuelSpend     = fuelSummary.totalFuelSpend;
+    const totalCombinedSpend = cumulativeCompanySpend + totalFuelSpend;
+    const totalDistanceLogged = vehicleComparison.reduce((s, r) => s + r.totalDistanceCovered, 0);
     const averageFleetEfficiency =
       totalDistanceLogged > 0
-        ? parseFloat((cumulativeCompanySpend / totalDistanceLogged).toFixed(4))
+        ? parseFloat((totalCombinedSpend / totalDistanceLogged).toFixed(4))
         : null;
 
     return {
-      kpis: { cumulativeCompanySpend, totalDistanceLogged, averageFleetEfficiency },
+      kpis: {
+        cumulativeCompanySpend,
+        totalFuelSpend,
+        totalCombinedSpend,
+        totalDistanceLogged,
+        averageFleetEfficiency,
+        avgFuelPricePerLitre: fuelSummary.avgPricePerLitre,
+        avgLitresPer100km: fuelSummary.avgLitresPer100km,
+      },
       expenseBreakdown,
+      fuelSummary,
       cpkTrend,
       vehicleComparison,
     };
