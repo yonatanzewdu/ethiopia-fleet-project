@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Truck, Users, Map, ShieldAlert,
   Building2, Plus, AlertTriangle, Activity, Lock, LogOut, User,
   CheckCircle2, XCircle, RefreshCw, Menu, X,
-  WifiOff, Trash2, Ban, RotateCcw, Crosshair, UserPlus, Radio, DollarSign,BarChart3,ShieldCheck,
+  WifiOff, Trash2, Ban, RotateCcw, Crosshair, UserPlus, Radio, DollarSign,BarChart3,ShieldCheck,KeyRound,Landmark,
 } from "lucide-react";
 
 
@@ -390,7 +390,14 @@ function AlertRow({ alert, onRenewed, onNavigateToMap }) {
 }
 
 // ── SUPER ADMIN VIEW ──────────────────────────────────────────────────────────
+const ADMIN_TABS = [
+  { id: "companies", label: "Companies",  icon: Landmark },
+  { id: "users",     label: "Users",      icon: Users    },
+  { id: "fleet",     label: "Fleet Setup", icon: Truck    },
+];
+
 function AdminView({ companies, onRefresh, onToast }) {
+  const [activeAdminTab, setActiveAdminTab] = useState("companies");
   const [companyForm, setCompanyForm] = useState({ name: "", registrationNumber: "", address: "" });
   const [vehicleForm, setVehicleForm] = useState({ companyId: "", plateNumber: "", model: "", chassisNumber: "", insuranceExpiry: "", inspectionExpiry: "" });
   const [driverForm,  setDriverForm]  = useState({ companyId: "", fullName: "", licenseNumber: "", licenseExpiry: "", phoneNumber: "" });
@@ -400,6 +407,14 @@ function AdminView({ companies, onRefresh, onToast }) {
   const [busy,        setBusy]        = useState("");
   const [suspended,   setSuspended]   = useState({});
   const [deletingId,  setDeletingId]  = useState(null);
+
+  // ── Password reset (inline per-row form) ──────────────────────────────
+  const [resetPwId,    setResetPwId]    = useState(null);
+  const [resetPwValue, setResetPwValue] = useState("");
+  const [resettingPw,  setResettingPw]  = useState(false);
+
+  // ── Delete user ────────────────────────────────────────────────────────
+  const [deletingUserId, setDeletingUserId] = useState(null);
 
   const fetchUsers = useCallback(async () => {
     try { setUsersList(Array.isArray(await get("/users")) ? await get("/users") : []); }
@@ -484,200 +499,316 @@ function AdminView({ companies, onRefresh, onToast }) {
     finally { setBusy(""); }
   };
 
+  const openResetPassword = (u) => {
+    setResetPwId(u.id);
+    setResetPwValue("");
+  };
+  const cancelResetPassword = () => {
+    setResetPwId(null);
+    setResetPwValue("");
+  };
+  const confirmResetPassword = async (u) => {
+    if (!resetPwValue || resetPwValue.length < 6) {
+      onToast("New password must be at least 6 characters.", "error");
+      return;
+    }
+    setResettingPw(true);
+    try {
+      await patch(`/users/${u.id}/password`, { newPassword: resetPwValue });
+      onToast(`Password reset for @${u.username}`, "success");
+      cancelResetPassword();
+    } catch {
+      onToast("Password reset failed — check backend.", "error");
+    } finally {
+      setResettingPw(false);
+    }
+  };
+
+  const deleteUser = async (u) => {
+    if (!window.confirm(`Permanently delete account "@${u.username}"? This cannot be undone.`)) return;
+    setDeletingUserId(u.id);
+    try {
+      await del(`/users/${u.id}`);
+      setUsersList((prev) => prev.filter((x) => x.id !== u.id));
+      onToast(`@${u.username} deleted.`, "success");
+    } catch {
+      onToast("Delete failed — check backend.", "error");
+    } finally {
+      setDeletingUserId(null);
+    }
+  };
+
   const companyOptions = companies.map((c) => <option key={c.id} value={c.id}>{c.name} (#{c.id})</option>);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-      <div style={styles.grid2}>
-        {/* Register company */}
-        <div style={styles.card()}>
-          <div style={styles.sectionTitle}>Register New Company</div>
-          <form onSubmit={submitCompany} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Field label="Company name"><input style={styles.input} required placeholder="Addis Freight Ltd." value={companyForm.name} onChange={(e) => setCompanyForm({ ...companyForm, name: e.target.value })} /></Field>
-            <Field label="Registration number"><input style={styles.input} required placeholder="ETH-2026-001" value={companyForm.registrationNumber} onChange={(e) => setCompanyForm({ ...companyForm, registrationNumber: e.target.value })} /></Field>
-            <Field label="Address"><input style={styles.input} required placeholder="Bole Sub-city, Addis Ababa" value={companyForm.address} onChange={(e) => setCompanyForm({ ...companyForm, address: e.target.value })} /></Field>
-            <button type="submit" style={{ ...styles.btn("primary"), marginTop: 4 }} disabled={!!busy}>
-              <Plus size={13} />{busy === "company" ? "Registering…" : "Register Company"}
+      {/* Sub-tab switcher */}
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
+        {ADMIN_TABS.map(({ id, label, icon: Icon }) => {
+          const isActive = activeAdminTab === id;
+          return (
+            <button key={id} onClick={() => setActiveAdminTab(id)} style={{
+              display: "flex", alignItems: "center", gap: 6,
+              padding: "10px 16px", borderRadius: 8, cursor: "pointer",
+              fontSize: 14, fontWeight: 600, whiteSpace: "nowrap",
+              background: isActive ? C.elevated : "transparent",
+              color:      isActive ? C.text     : C.muted,
+              border: isActive ? `1px solid ${C.border}` : "1px solid transparent",
+              transition: "all 0.15s",
+            }}>
+              <Icon size={14} /> {label}
             </button>
-          </form>
-        </div>
+          );
+        })}
+      </div>
 
-        {/* Provision user */}
-        <div style={styles.card()}>
-          <div style={styles.sectionTitle}>Provision User Account</div>
-          <form onSubmit={submitUser} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Field label="Username"><input style={styles.input} required placeholder="e.g., dawit_driver" value={userForm.username} onChange={(e) => setUserForm({ ...userForm, username: e.target.value })} /></Field>
-            <Field label="Password"><input type="password" style={styles.input} required placeholder="••••••••" value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} /></Field>
-   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div>
-                <label style={styles.label}>Role</label>
-                <select style={styles.select} value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value, driverId: "" })}>
-                  <option value="manager">Manager</option>
-                  <option value="driver">Driver</option>
-                </select>
-              </div>
-              <div>
-                <label style={styles.label}>Company</label>
-                <select style={styles.select} value={userForm.companyId} onChange={(e) => setUserForm({ ...userForm, companyId: e.target.value, driverId: "" })} required>
-                  <option value="">— select —</option>
-                  {companyOptions}
-                </select>
-              </div>
+      {activeAdminTab === "companies" && (
+        <>
+          <div style={styles.card()}>
+            <div style={styles.sectionTitle}>Register New Company</div>
+            <form onSubmit={submitCompany} style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 480 }}>
+              <Field label="Company name"><input style={styles.input} required placeholder="Addis Freight Ltd." value={companyForm.name} onChange={(e) => setCompanyForm({ ...companyForm, name: e.target.value })} /></Field>
+              <Field label="Registration number"><input style={styles.input} required placeholder="ETH-2026-001" value={companyForm.registrationNumber} onChange={(e) => setCompanyForm({ ...companyForm, registrationNumber: e.target.value })} /></Field>
+              <Field label="Address"><input style={styles.input} required placeholder="Bole Sub-city, Addis Ababa" value={companyForm.address} onChange={(e) => setCompanyForm({ ...companyForm, address: e.target.value })} /></Field>
+              <button type="submit" style={{ ...styles.btn("primary"), marginTop: 4, alignSelf: "flex-start" }} disabled={!!busy}>
+                <Plus size={13} />{busy === "company" ? "Registering…" : "Register Company"}
+              </button>
+            </form>
+          </div>
+
+          <div style={styles.card()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={styles.sectionTitle}>Company Directory</div>
+              <button style={styles.btn("secondary")} onClick={onRefresh}><RefreshCw size={12} />Refresh</button>
             </div>
- 
-            {userForm.role === "driver" && (
-              <div>
-                <label style={styles.label}>Link to Driver Record</label>
-                <select
-                  style={styles.select}
-                  value={userForm.driverId}
-                  onChange={(e) => setUserForm({ ...userForm, driverId: e.target.value })}
-                  required
-                  disabled={!userForm.companyId}
-                >
-                  <option value="">
-                    {userForm.companyId ? "— select driver —" : "Select a company first"}
-                  </option>
-                  {driversForUserForm.map((d) => (
-                    <option key={d.id} value={d.id}>{d.fullName}</option>
-                  ))}
-                </select>
+            {companies.length === 0 ? (
+              <div style={{ color: C.muted, textAlign: "center", padding: "24px 0" }}>No companies registered yet.</div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                      {["ID", "Name", "Reg. Number", "Address", "Created", "Actions"].map((h) => (
+                        <th key={h} style={{ textAlign: "left", padding: "5px 8px", color: C.muted, fontSize: 12, fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {companies.map((c) => {
+                      const isSuspended = !!suspended[c.id];
+                      return (
+                        <tr key={c.id} style={{ borderBottom: `1px solid ${C.border}`, opacity: isSuspended ? 0.45 : 1, background: isSuspended ? "#0a0d12" : "transparent", transition: "opacity 0.15s" }}>
+                          <td style={{ padding: "9px 8px", color: C.muted }}>{c.id}</td>
+                          <td style={{ padding: "9px 8px", fontWeight: 500 }}>
+                            {c.name}
+                            {isSuspended && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "#1c1917", color: C.muted, border: `1px solid ${C.border}` }}>SUSPENDED</span>}
+                          </td>
+                          <td style={{ padding: "9px 8px", color: C.muted }}>{c.registrationNumber}</td>
+                          <td style={{ padding: "9px 8px", color: C.muted }}>{c.address}</td>
+                          <td style={{ padding: "9px 8px", color: C.muted }}>{formatDate(c.createdAt)}</td>
+                          <td style={{ padding: "9px 8px" }}>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                              <button style={{ ...styles.btn("secondary"), padding: "6px 10px", fontSize: 13, color: isSuspended ? C.success : C.warning }} onClick={() => toggleSuspend(c.id)}>
+                                {isSuspended ? <RotateCcw size={12} /> : <Ban size={12} />}{isSuspended ? "Reinstate" : "Suspend"}
+                              </button>
+                              <button style={{ ...styles.btn("secondary"), padding: "6px 10px", fontSize: 13, color: C.critical, borderColor: "#7f1d1d" }} onClick={() => deleteCompany(c)} disabled={deletingId === c.id}>
+                                <Trash2 size={12} />{deletingId === c.id ? "Deleting…" : "Delete"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
- 
-            <button type="submit" style={{ ...styles.btn("primary"), marginTop: 4, background: C.info }} disabled={!!busy}>
-              <UserPlus size={13} />{busy === "user" ? "Creating…" : "Provision Account"}
-            </button>
-          </form>
-        </div>
-      </div>
-
-      <div style={styles.grid2}>
-        {/* Register vehicle */}
-        <div style={styles.card()}>
-          <div style={styles.sectionTitle}>Register Vehicle</div>
-          <form onSubmit={submitVehicle} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Field label="Assign to company">
-              <select style={styles.select} required value={vehicleForm.companyId} onChange={(e) => setVehicleForm({ ...vehicleForm, companyId: e.target.value })}>
-                <option value="">— select company —</option>
-                {companyOptions}
-              </select>
-            </Field>
-            <Field label="Plate number"><input style={styles.input} required placeholder="AA-12345" value={vehicleForm.plateNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, plateNumber: e.target.value })} /></Field>
-            <Field label="Model"><input style={styles.input} required placeholder="Isuzu FVR" value={vehicleForm.model} onChange={(e) => setVehicleForm({ ...vehicleForm, model: e.target.value })} /></Field>
-            <Field label="Chassis number"><input style={styles.input} placeholder="JABI6AK2XH7009001" value={vehicleForm.chassisNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, chassisNumber: e.target.value })} /></Field>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <Field label="Insurance expiry"><input type="date" style={styles.input} value={vehicleForm.insuranceExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceExpiry: e.target.value })} /></Field>
-              <Field label="Inspection expiry"><input type="date" style={styles.input} value={vehicleForm.inspectionExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, inspectionExpiry: e.target.value })} /></Field>
-            </div>
-            <button type="submit" style={{ ...styles.btn("primary"), marginTop: 4 }} disabled={!!busy}>
-              <Truck size={13} />{busy === "vehicle" ? "Registering…" : "Register Vehicle"}
-            </button>
-          </form>
-        </div>
-
-        {/* Onboard driver */}
-        <div style={styles.card()}>
-          <div style={styles.sectionTitle}>Onboard Driver</div>
-          <form onSubmit={submitDriver} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Field label="Assign to company">
-              <select style={styles.select} required value={driverForm.companyId} onChange={(e) => setDriverForm({ ...driverForm, companyId: e.target.value })}>
-                <option value="">— select company —</option>
-                {companyOptions}
-              </select>
-            </Field>
-            <Field label="Full name"><input style={styles.input} required placeholder="Abebe Girma" value={driverForm.fullName} onChange={(e) => setDriverForm({ ...driverForm, fullName: e.target.value })} /></Field>
-            <Field label="License number"><input style={styles.input} required placeholder="ETD-2021-003456" value={driverForm.licenseNumber} onChange={(e) => setDriverForm({ ...driverForm, licenseNumber: e.target.value })} /></Field>
-            <Field label="License expiry"><input type="date" style={styles.input} value={driverForm.licenseExpiry} onChange={(e) => setDriverForm({ ...driverForm, licenseExpiry: e.target.value })} /></Field>
-            <Field label="Phone number"><input style={styles.input} placeholder="+251 91 234 5678" value={driverForm.phoneNumber} onChange={(e) => setDriverForm({ ...driverForm, phoneNumber: e.target.value })} /></Field>
-            <button type="submit" style={{ ...styles.btn("primary"), marginTop: 4 }} disabled={!!busy}>
-              <Users size={13} />{busy === "driver" ? "Onboarding…" : "Onboard Driver"}
-            </button>
-          </form>
-        </div>
-      </div>
-
-      {/* Users registry */}
-      <div style={styles.card()}>
-        <div style={styles.sectionTitle}>Global User Accounts</div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["Username", "Role", "Company"].map((h) => (
-                  <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontSize: 10, fontWeight: 600 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {usersList.map((u, i) => (
-                <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                  <td style={{ padding: "8px", fontWeight: 600 }}>@{u.username}</td>
-                  <td style={{ padding: "8px" }}>
-                    <span style={{ fontSize: 11, fontWeight: 500, color: u.role === "manager" ? C.accent : u.role === "admin" ? C.critical : C.warning }}>
-                      {u.role?.toUpperCase()}
-                    </span>
-                  </td>
-                  <td style={{ padding: "8px", color: C.muted }}>
-                    {companies.find((c) => c.id === u.companyId)?.name || `ID: ${u.companyId || "System"}`}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Company directory */}
-      <div style={styles.card()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={styles.sectionTitle}>Company Directory</div>
-          <button style={styles.btn("secondary")} onClick={onRefresh}><RefreshCw size={12} />Refresh</button>
-        </div>
-        {companies.length === 0 ? (
-          <div style={{ color: C.muted, textAlign: "center", padding: "24px 0" }}>No companies registered yet.</div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
-              <thead>
-                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                  {["ID", "Name", "Reg. Number", "Address", "Created", "Actions"].map((h) => (
-                    <th key={h} style={{ textAlign: "left", padding: "5px 8px", color: C.muted, fontSize: 10, fontWeight: 600 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {companies.map((c) => {
-                  const isSuspended = !!suspended[c.id];
-                  return (
-                    <tr key={c.id} style={{ borderBottom: `1px solid ${C.border}`, opacity: isSuspended ? 0.45 : 1, background: isSuspended ? "#0a0d12" : "transparent", transition: "opacity 0.15s" }}>
-                      <td style={{ padding: "9px 8px", color: C.muted }}>{c.id}</td>
-                      <td style={{ padding: "9px 8px", fontWeight: 500 }}>
-                        {c.name}
-                        {isSuspended && <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "#1c1917", color: C.muted, border: `1px solid ${C.border}` }}>SUSPENDED</span>}
-                      </td>
-                      <td style={{ padding: "9px 8px", color: C.muted }}>{c.registrationNumber}</td>
-                      <td style={{ padding: "9px 8px", color: C.muted }}>{c.address}</td>
-                      <td style={{ padding: "9px 8px", color: C.muted }}>{formatDate(c.createdAt)}</td>
-                      <td style={{ padding: "9px 8px" }}>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button style={{ ...styles.btn("secondary"), padding: "5px 9px", fontSize: 11, color: isSuspended ? C.success : C.warning }} onClick={() => toggleSuspend(c.id)}>
-                            {isSuspended ? <RotateCcw size={12} /> : <Ban size={12} />}{isSuspended ? "Reinstate" : "Suspend"}
-                          </button>
-                          <button style={{ ...styles.btn("secondary"), padding: "5px 9px", fontSize: 11, color: C.critical, borderColor: "#7f1d1d" }} onClick={() => deleteCompany(c)} disabled={deletingId === c.id}>
-                            <Trash2 size={12} />{deletingId === c.id ? "Deleting…" : "Delete"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
           </div>
-        )}
-      </div>
+        </>
+      )}
+
+      {activeAdminTab === "users" && (
+        <>
+          <div style={styles.card()}>
+            <div style={styles.sectionTitle}>Provision User Account</div>
+            <form onSubmit={submitUser} style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 480 }}>
+              <Field label="Username"><input style={styles.input} required placeholder="e.g., dawit_driver" value={userForm.username} onChange={(e) => setUserForm({ ...userForm, username: e.target.value })} /></Field>
+              <Field label="Password"><input type="password" style={styles.input} required placeholder="••••••••" value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} /></Field>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={styles.label}>Role</label>
+                  <select style={styles.select} value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value, driverId: "" })}>
+                    <option value="manager">Manager</option>
+                    <option value="driver">Driver</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={styles.label}>Company</label>
+                  <select style={styles.select} value={userForm.companyId} onChange={(e) => setUserForm({ ...userForm, companyId: e.target.value, driverId: "" })} required>
+                    <option value="">— select —</option>
+                    {companyOptions}
+                  </select>
+                </div>
+              </div>
+
+              {userForm.role === "driver" && (
+                <div>
+                  <label style={styles.label}>Link to Driver Record</label>
+                  <select
+                    style={styles.select}
+                    value={userForm.driverId}
+                    onChange={(e) => setUserForm({ ...userForm, driverId: e.target.value })}
+                    required
+                    disabled={!userForm.companyId}
+                  >
+                    <option value="">
+                      {userForm.companyId ? "— select driver —" : "Select a company first"}
+                    </option>
+                    {driversForUserForm.map((d) => (
+                      <option key={d.id} value={d.id}>{d.fullName}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <button type="submit" style={{ ...styles.btn("primary"), marginTop: 4, background: C.info, alignSelf: "flex-start" }} disabled={!!busy}>
+                <UserPlus size={13} />{busy === "user" ? "Creating…" : "Provision Account"}
+              </button>
+            </form>
+          </div>
+
+          <div style={styles.card()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={styles.sectionTitle}>Global User Accounts</div>
+              <button style={styles.btn("secondary")} onClick={fetchUsers}><RefreshCw size={12} />Refresh</button>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    {["Username", "Role", "Company", "Actions"].map((h) => (
+                      <th key={h} style={{ textAlign: "left", padding: "6px 8px", color: C.muted, fontSize: 12, fontWeight: 600 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {usersList.map((u, i) => {
+                    const isResetting = resetPwId === u.id;
+                    return [
+                      <tr key={`u-${u.id ?? i}`} style={{ borderBottom: isResetting ? "none" : `1px solid ${C.border}` }}>
+                        <td style={{ padding: "8px", fontWeight: 600 }}>@{u.username}</td>
+                        <td style={{ padding: "8px" }}>
+                          <span style={{ fontSize: 13, fontWeight: 500, color: u.role === "manager" ? C.accent : u.role === "admin" ? C.critical : C.warning }}>
+                            {u.role?.toUpperCase()}
+                          </span>
+                        </td>
+                        <td style={{ padding: "8px", color: C.muted }}>
+                          {companies.find((c) => c.id === u.companyId)?.name || `ID: ${u.companyId || "System"}`}
+                        </td>
+                        <td style={{ padding: "8px" }}>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            <button
+                              style={{ ...styles.btn("secondary"), padding: "6px 10px", fontSize: 13, color: C.accent }}
+                              onClick={() => (isResetting ? cancelResetPassword() : openResetPassword(u))}
+                            >
+                              <KeyRound size={12} />{isResetting ? "Cancel" : "Reset Password"}
+                            </button>
+                            <button
+                              style={{ ...styles.btn("secondary"), padding: "6px 10px", fontSize: 13, color: C.critical, borderColor: "#7f1d1d" }}
+                              onClick={() => deleteUser(u)}
+                              disabled={deletingUserId === u.id || u.role === "admin"}
+                              title={u.role === "admin" ? "System admin accounts cannot be deleted here" : undefined}
+                            >
+                              <Trash2 size={12} />{deletingUserId === u.id ? "Deleting…" : "Delete"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>,
+                      isResetting && (
+                        <tr key={`u-${u.id ?? i}-reset`} style={{ borderBottom: `1px solid ${C.border}` }}>
+                          <td colSpan={4} style={{ padding: "0 8px 12px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
+                              <span style={{ fontSize: 13, color: C.muted, whiteSpace: "nowrap" }}>New password for @{u.username}:</span>
+                              <input
+                                type="password"
+                                style={{ ...styles.input, width: "auto", flex: 1, minWidth: 160 }}
+                                placeholder="min. 6 characters"
+                                value={resetPwValue}
+                                onChange={(e) => setResetPwValue(e.target.value)}
+                                autoFocus
+                              />
+                              <button
+                                style={{ ...styles.btn("primary"), padding: "8px 14px" }}
+                                onClick={() => confirmResetPassword(u)}
+                                disabled={resettingPw}
+                              >
+                                {resettingPw ? "Saving…" : "Save"}
+                              </button>
+                              <button
+                                style={{ ...styles.btn("secondary"), padding: "8px 14px" }}
+                                onClick={cancelResetPassword}
+                                disabled={resettingPw}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ),
+                    ];
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {activeAdminTab === "fleet" && (
+        <div style={styles.grid2}>
+          <div style={styles.card()}>
+            <div style={styles.sectionTitle}>Register Vehicle</div>
+            <form onSubmit={submitVehicle} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <Field label="Assign to company">
+                <select style={styles.select} required value={vehicleForm.companyId} onChange={(e) => setVehicleForm({ ...vehicleForm, companyId: e.target.value })}>
+                  <option value="">— select company —</option>
+                  {companyOptions}
+                </select>
+              </Field>
+              <Field label="Plate number"><input style={styles.input} required placeholder="AA-12345" value={vehicleForm.plateNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, plateNumber: e.target.value })} /></Field>
+              <Field label="Model"><input style={styles.input} required placeholder="Isuzu FVR" value={vehicleForm.model} onChange={(e) => setVehicleForm({ ...vehicleForm, model: e.target.value })} /></Field>
+              <Field label="Chassis number"><input style={styles.input} placeholder="JABI6AK2XH7009001" value={vehicleForm.chassisNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, chassisNumber: e.target.value })} /></Field>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <Field label="Insurance expiry"><input type="date" style={styles.input} value={vehicleForm.insuranceExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceExpiry: e.target.value })} /></Field>
+                <Field label="Inspection expiry"><input type="date" style={styles.input} value={vehicleForm.inspectionExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, inspectionExpiry: e.target.value })} /></Field>
+              </div>
+              <button type="submit" style={{ ...styles.btn("primary"), marginTop: 4 }} disabled={!!busy}>
+                <Truck size={13} />{busy === "vehicle" ? "Registering…" : "Register Vehicle"}
+              </button>
+            </form>
+          </div>
+
+          <div style={styles.card()}>
+            <div style={styles.sectionTitle}>Onboard Driver</div>
+            <form onSubmit={submitDriver} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <Field label="Assign to company">
+                <select style={styles.select} required value={driverForm.companyId} onChange={(e) => setDriverForm({ ...driverForm, companyId: e.target.value })}>
+                  <option value="">— select company —</option>
+                  {companyOptions}
+                </select>
+              </Field>
+              <Field label="Full name"><input style={styles.input} required placeholder="Abebe Girma" value={driverForm.fullName} onChange={(e) => setDriverForm({ ...driverForm, fullName: e.target.value })} /></Field>
+              <Field label="License number"><input style={styles.input} required placeholder="ETD-2021-003456" value={driverForm.licenseNumber} onChange={(e) => setDriverForm({ ...driverForm, licenseNumber: e.target.value })} /></Field>
+              <Field label="License expiry"><input type="date" style={styles.input} value={driverForm.licenseExpiry} onChange={(e) => setDriverForm({ ...driverForm, licenseExpiry: e.target.value })} /></Field>
+              <Field label="Phone number"><input style={styles.input} placeholder="+251 91 234 5678" value={driverForm.phoneNumber} onChange={(e) => setDriverForm({ ...driverForm, phoneNumber: e.target.value })} /></Field>
+              <button type="submit" style={{ ...styles.btn("primary"), marginTop: 4 }} disabled={!!busy}>
+                <Users size={13} />{busy === "driver" ? "Onboarding…" : "Onboard Driver"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
