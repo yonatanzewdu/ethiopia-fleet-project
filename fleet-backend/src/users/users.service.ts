@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -60,5 +60,24 @@ export class UsersService {
     const saved = await this.userRepository.save(newUser);
     const { password: _omit, ...result } = saved;
     return result;
+  }
+
+  async resetPassword(id: number, newPassword: string): Promise<{ success: true }> {
+    const user = await this.userRepository.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException(`User #${id} not found.`);
+    }
+    user.password = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
+    await this.userRepository.save(user);
+    return { success: true };
+  }
+
+  async deleteUser(id: number): Promise<{ success: true }> {
+    const user = await this.userRepository.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException(`User #${id} not found.`);
+    }
+    await this.userRepository.remove(user);
+    return { success: true };
   }
 }
