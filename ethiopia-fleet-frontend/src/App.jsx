@@ -1537,8 +1537,18 @@ function LiveMapView({ companyId, focusedVehicleId }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
       {/* Status bar */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.elevated, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{
+        display: "flex",
+        alignItems: isMobile ? "flex-start" : "center",
+        justifyContent: "space-between",
+        flexWrap: "wrap",
+        gap: 10,
+        background: C.elevated,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: "10px 16px",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <Activity size={15} color={C.accent} />
           <span style={{ fontWeight: 600, fontSize: 14 }}>Live Telematics — Addis Ababa</span>
           <span style={{ fontSize: 10, background: "#052e16", color: C.success, border: `1px solid #166534`, borderRadius: 20, padding: "2px 8px", fontWeight: 600 }}>● LIVE</span>
@@ -1548,7 +1558,7 @@ function LiveMapView({ companyId, focusedVehicleId }) {
             </span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           {[["In-Zone", C.success, displayVehicles.filter((v) => !v.isBreaching && v.status !== "Maintenance").length],
             ["Maintenance", C.warning, displayVehicles.filter((v) => v.status === "Maintenance").length],
             ["Breaching",   C.breach,  breachCount]].map(([label, color, count]) => (
@@ -1573,14 +1583,19 @@ function LiveMapView({ companyId, focusedVehicleId }) {
       {/* ── GPS HISTORY PANEL ─────────────────────────────────────────────── */}
       {historyOpen && (
         <div style={{ ...styles.card(), display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2, flexWrap: "wrap" }}>
             <History size={14} color={C.accent} />
             <span style={{ fontWeight: 600, fontSize: 13 }}>GPS History Trail</span>
             <span style={{ fontSize: 11, color: C.muted }}>— select vehicles and a time window, then load trails</span>
           </div>
 
           {/* Time range pickers */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 10, alignItems: "flex-end" }}>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr auto auto",
+            gap: 10,
+            alignItems: "flex-end",
+          }}>
             <Field label="From">
               <input
                 type="datetime-local"
@@ -1598,9 +1613,14 @@ function LiveMapView({ companyId, focusedVehicleId }) {
               />
             </Field>
             {/* Quick presets */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              gridColumn: isMobile ? "1 / -1" : "auto",
+            }}>
               <span style={{ ...styles.label }}>Quick range</span>
-              <div style={{ display: "flex", gap: 5 }}>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {[["1h", 1], ["6h", 6], ["24h", 24], ["7d", 168]].map(([label, hours]) => (
                   <button
                     key={label}
@@ -1615,7 +1635,14 @@ function LiveMapView({ companyId, focusedVehicleId }) {
               </div>
             </div>
             <button
-              style={{ ...styles.btn("primary"), alignSelf: "flex-end", padding: "7px 16px", fontSize: 12 }}
+              style={{
+                ...styles.btn("primary"),
+                alignSelf: "flex-end",
+                padding: "7px 16px",
+                fontSize: 12,
+                gridColumn: isMobile ? "1 / -1" : "auto",
+                justifyContent: "center",
+              }}
               onClick={fetchTrails}
               disabled={trailLoading || !historyVehicles.length}
             >
