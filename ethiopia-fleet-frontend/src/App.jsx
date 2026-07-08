@@ -1,12 +1,12 @@
 import "leaflet/dist/leaflet.css";
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from "react-leaflet";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMap } from "react-leaflet";
 import L from "leaflet";
 import {
   LayoutDashboard, Truck, Users, Map, ShieldAlert,
   Building2, Plus, AlertTriangle, Activity, Lock, LogOut, User,
   CheckCircle2, XCircle, RefreshCw, Menu, X,
-  WifiOff, Trash2, Ban, RotateCcw, Crosshair, UserPlus, Radio, DollarSign,BarChart3,ShieldCheck,KeyRound,Landmark,
+  WifiOff, Trash2, Ban, RotateCcw, Crosshair, UserPlus, Radio, DollarSign,BarChart3,ShieldCheck,KeyRound,Landmark,History,
 } from "lucide-react";
 
 
@@ -1330,8 +1330,27 @@ const DEFAULT_GEOFENCE = { lat: 9.03, lng: 38.74, radius: 2000 };
 //   5. A close (×) button inside the panel lets the user dismiss it on mobile.
 //   6. A floating "⚙ Geofence" FAB button appears on mobile when panel is closed.
 // ─────────────────────────────────────────────────────────────────────────────
+// ── GPS HISTORY TRAIL COLOURS ──────────────────────────────────────────────
+const TRAIL_PALETTE = [
+  "#3b82f6","#a855f7","#ec4899","#f59e0b","#22c55e",
+  "#06b6d4","#f97316","#84cc16","#e11d48","#0ea5e9",
+];
+function trailColor(idx) { return TRAIL_PALETTE[idx % TRAIL_PALETTE.length]; }
+
+// Quick date helpers
+function toISOLocal(date) {
+  // Returns "YYYY-MM-DDTHH:MM" in local time for datetime-local inputs
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function defaultTimeRange() {
+  const to   = new Date();
+  const from = new Date(to.getTime() - 6 * 60 * 60 * 1000); // last 6 hours
+  return { from: toISOLocal(from), to: toISOLocal(to) };
+}
+
 function LiveMapView({ companyId, focusedVehicleId }) {
-  // ── Mobile detection (local, so LiveMapView is self-contained) ────────────
+  // ── Mobile detection ───────────────────────────────────────────────────────
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
   useEffect(() => {
     const handler = () => setIsMobile(window.innerWidth <= 768);
@@ -1346,13 +1365,17 @@ function LiveMapView({ companyId, focusedVehicleId }) {
   const [saving,      setSaving]      = useState(false);
   const [saveMsg,     setSaveMsg]     = useState("");
 
-  // ── Panel open state: hidden by default on mobile, always visible on desktop
+  // ── Panel open state ───────────────────────────────────────────────────────
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 768);
+  useEffect(() => { if (!isMobile) setPanelOpen(true); }, [isMobile]);
 
-  // Keep panelOpen in sync if the window is resized across the breakpoint
-  useEffect(() => {
-    if (!isMobile) setPanelOpen(true);
-  }, [isMobile]);
+  // ── GPS HISTORY STATE ──────────────────────────────────────────────────────
+  const [historyOpen,     setHistoryOpen]     = useState(false);
+  const [historyRange,    setHistoryRange]    = useState(defaultTimeRange);
+  const [historyVehicles, setHistoryVehicles] = useState([]); // which vehicles to show trail for
+  const [trailData,       setTrailData]       = useState({}); // { [vehicleId]: [[lat,lng], ...] }
+  const [trailLoading,    setTrailLoading]    = useState(false);
+  const [trailError,      setTrailError]      = useState("");
 
   const loadVehiclesAndGeofences = useCallback(async () => {
     if (!companyId) return;
@@ -1376,6 +1399,38 @@ function LiveMapView({ companyId, focusedVehicleId }) {
   }, [companyId]);
 
   useEffect(() => { loadVehiclesAndGeofences(); }, [loadVehiclesAndGeofences]);
+
+  // ── FETCH GPS HISTORY TRAILS ───────────────────────────────────────────────
+  const fetchTrails = useCallback(async () => {
+    if (!historyVehicles.length) { setTrailData({}); return; }
+    setTrailLoading(true); setTrailError("");
+    try {
+      const fromISO = new Date(historyRange.from).toISOString();
+      const toISO   = new Date(historyRange.to).toISOString();
+      const results = await Promise.all(
+        historyVehicles.map((id) =>
+          get(`/vehicles/${id}/location-history?from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`)
+            .then((pts) => ({ id, pts: Array.isArray(pts) ? pts : [] }))
+            .catch(() => ({ id, pts: [] }))
+        )
+      );
+      const next = {};
+      results.forEach(({ id, pts }) => {
+        // Each point: { lat, lng, recordedAt }  OR  [lat, lng]
+        next[id] = pts
+          .filter((p) => p && p.lat != null && p.lng != null)
+          .map((p) => [Number(p.lat), Number(p.lng)]);
+      });
+      setTrailData(next);
+    } catch {
+      setTrailError("Could not load GPS history — check backend connection.");
+    } finally {
+      setTrailLoading(false);
+    }
+  }, [historyVehicles, historyRange]);
+
+  // Clear trails when history panel closes
+  useEffect(() => { if (!historyOpen) { setTrailData({}); setTrailError(""); } }, [historyOpen]);
 
   useEffect(() => {
     if (selectedId) return;
@@ -1486,7 +1541,7 @@ function LiveMapView({ companyId, focusedVehicleId }) {
             </span>
           )}
         </div>
-        <div style={{ display: "flex", gap: 16 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           {[["In-Zone", C.success, displayVehicles.filter((v) => !v.isBreaching && v.status !== "Maintenance").length],
             ["Maintenance", C.warning, displayVehicles.filter((v) => v.status === "Maintenance").length],
             ["Breaching",   C.breach,  breachCount]].map(([label, color, count]) => (
@@ -1494,8 +1549,150 @@ function LiveMapView({ companyId, focusedVehicleId }) {
               <div style={{ width: 7, height: 7, borderRadius: "50%", background: color }} />{count} {label}
             </div>
           ))}
+          {/* History toggle */}
+          <button
+            style={{
+              ...styles.btn(historyOpen ? "primary" : "secondary"),
+              padding: "5px 12px", fontSize: 11,
+              background: historyOpen ? C.accent : C.elevated,
+            }}
+            onClick={() => setHistoryOpen((v) => !v)}
+          >
+            <History size={12} /> {historyOpen ? "Hide History" : "GPS History"}
+          </button>
         </div>
       </div>
+
+      {/* ── GPS HISTORY PANEL ─────────────────────────────────────────────── */}
+      {historyOpen && (
+        <div style={{ ...styles.card(), display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+            <History size={14} color={C.accent} />
+            <span style={{ fontWeight: 600, fontSize: 13 }}>GPS History Trail</span>
+            <span style={{ fontSize: 11, color: C.muted }}>— select vehicles and a time window, then load trails</span>
+          </div>
+
+          {/* Time range pickers */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 10, alignItems: "flex-end" }}>
+            <Field label="From">
+              <input
+                type="datetime-local"
+                style={{ ...styles.input, fontSize: 12 }}
+                value={historyRange.from}
+                onChange={(e) => setHistoryRange((r) => ({ ...r, from: e.target.value }))}
+              />
+            </Field>
+            <Field label="To">
+              <input
+                type="datetime-local"
+                style={{ ...styles.input, fontSize: 12 }}
+                value={historyRange.to}
+                onChange={(e) => setHistoryRange((r) => ({ ...r, to: e.target.value }))}
+              />
+            </Field>
+            {/* Quick presets */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ ...styles.label }}>Quick range</span>
+              <div style={{ display: "flex", gap: 5 }}>
+                {[["1h", 1], ["6h", 6], ["24h", 24], ["7d", 168]].map(([label, hours]) => (
+                  <button
+                    key={label}
+                    style={{ ...styles.btn("secondary"), padding: "4px 9px", fontSize: 11 }}
+                    onClick={() => {
+                      const to   = new Date();
+                      const from = new Date(to.getTime() - hours * 3600_000);
+                      setHistoryRange({ from: toISOLocal(from), to: toISOLocal(to) });
+                    }}
+                  >{label}</button>
+                ))}
+              </div>
+            </div>
+            <button
+              style={{ ...styles.btn("primary"), alignSelf: "flex-end", padding: "7px 16px", fontSize: 12 }}
+              onClick={fetchTrails}
+              disabled={trailLoading || !historyVehicles.length}
+            >
+              {trailLoading ? <><RefreshCw size={11} style={{ animation: "spin 1s linear infinite" }} /> Loading…</> : "Load Trails"}
+            </button>
+          </div>
+
+          {/* Vehicle checkboxes */}
+          <div>
+            <div style={{ ...styles.label, marginBottom: 8 }}>
+              Vehicles to trace&nbsp;
+              <button
+                style={{ background: "none", border: "none", color: C.accent, fontSize: 11, cursor: "pointer", padding: 0 }}
+                onClick={() => setHistoryVehicles(displayVehicles.map((v) => v.id))}
+              >Select all</button>
+              &nbsp;·&nbsp;
+              <button
+                style={{ background: "none", border: "none", color: C.muted, fontSize: 11, cursor: "pointer", padding: 0 }}
+                onClick={() => setHistoryVehicles([])}
+              >Clear</button>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {displayVehicles.map((v, idx) => {
+                const checked = historyVehicles.includes(v.id);
+                const color   = trailColor(idx);
+                return (
+                  <label
+                    key={v.id}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 7,
+                      padding: "5px 10px", borderRadius: 7, cursor: "pointer",
+                      background: checked ? `${color}18` : C.surface,
+                      border: `1px solid ${checked ? color : C.border}`,
+                      fontSize: 12, fontWeight: checked ? 600 : 400,
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      style={{ accentColor: color }}
+                      onChange={(e) => setHistoryVehicles((prev) =>
+                        e.target.checked ? [...prev, v.id] : prev.filter((x) => x !== v.id)
+                      )}
+                    />
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                    {v.plateNumber}
+                    {/* show point count if loaded */}
+                    {trailData[v.id] && (
+                      <span style={{ fontSize: 10, color: C.muted }}>({trailData[v.id].length} pts)</span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {trailError && (
+            <div style={{ color: C.critical, fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+              <XCircle size={13} /> {trailError}
+            </div>
+          )}
+
+          {/* Trail legend — only shown after data is loaded */}
+          {Object.keys(trailData).length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              {displayVehicles
+                .filter((v) => trailData[v.id]?.length > 0)
+                .map((v, idx) => (
+                  <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                    <div style={{ width: 24, height: 3, borderRadius: 2, background: trailColor(idx) }} />
+                    <span style={{ color: C.text }}>{v.plateNumber}</span>
+                    <span style={{ color: C.muted }}>— {trailData[v.id].length} points</span>
+                  </div>
+                ))}
+              {displayVehicles.filter((v) => trailData[v.id]?.length === 0).length > 0 && (
+                <div style={{ fontSize: 11, color: C.muted }}>
+                  No data in this time window for: {displayVehicles.filter((v) => trailData[v.id]?.length === 0).map((v) => v.plateNumber).join(", ")}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Map + geofence panel */}
       <div style={{ position: "relative", height: "calc(100vh - 220px)", minHeight: 420, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
@@ -1535,6 +1732,50 @@ function LiveMapView({ companyId, focusedVehicleId }) {
               </Popup>
             </Circle>
           ))}
+
+          {/* ── GPS HISTORY POLYLINES ──────────────────────────────────────── */}
+          {displayVehicles.map((v, idx) => {
+            const pts = trailData[v.id];
+            if (!pts || pts.length < 2) return null;
+            const color = trailColor(idx);
+            return (
+              <React.Fragment key={`trail-${v.id}`}>
+                {/* Main trail line */}
+                <Polyline
+                  positions={pts}
+                  pathOptions={{ color, weight: 3, opacity: 0.85, dashArray: "none" }}
+                />
+                {/* Start marker (green dot) */}
+                <Circle
+                  center={pts[0]}
+                  radius={25}
+                  pathOptions={{ color: "#22c55e", fillColor: "#22c55e", fillOpacity: 1, weight: 2 }}
+                >
+                  <Popup>
+                    <div style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 12 }}>
+                      <strong style={{ color: "#22c55e" }}>▶ Start</strong><br />
+                      {v.plateNumber}<br />
+                      {pts[0][0].toFixed(5)}°N, {pts[0][1].toFixed(5)}°E
+                    </div>
+                  </Popup>
+                </Circle>
+                {/* End marker (red dot) */}
+                <Circle
+                  center={pts[pts.length - 1]}
+                  radius={25}
+                  pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 1, weight: 2 }}
+                >
+                  <Popup>
+                    <div style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 12 }}>
+                      <strong style={{ color: "#ef4444" }}>■ End</strong><br />
+                      {v.plateNumber}<br />
+                      {pts[pts.length-1][0].toFixed(5)}°N, {pts[pts.length-1][1].toFixed(5)}°E
+                    </div>
+                  </Popup>
+                </Circle>
+              </React.Fragment>
+            );
+          })}
 
           {displayVehicles.map((v) => {
             const color = pinColor(v);
