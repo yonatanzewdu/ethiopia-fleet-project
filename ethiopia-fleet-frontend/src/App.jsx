@@ -851,7 +851,9 @@ function DashboardView({ companyId, onNavigateToMap }) {
 
       (Array.isArray(veh) ? veh : []).forEach((v) => {
         const vehicleGeofence = geofenceByVehicle[v.id] || DEFAULT_GEOFENCE;
-        const [vLat, vLng] = getVehicleCoordinates(v.id);
+       const [vLat, vLng] = (v.lat && v.lng)
+  ? [Number(v.lat), Number(v.lng)]
+  : getVehicleCoordinates(v.id);
         const dist = haversineMeters(vLat, vLng, vehicleGeofence.lat, vehicleGeofence.lng);
         if (dist > vehicleGeofence.radius) {
           extraCritical++;
@@ -1467,7 +1469,10 @@ function LiveMapView({ companyId, focusedVehicleId }) {
   const breachCount = displayVehicles.filter((v) => v.isBreaching).length;
 
   const mapCenter = useMemo(() => {
-    if (focusedVehicleId) return getVehicleCoordinates(focusedVehicleId);
+    if (focusedVehicleId) {
+  const focused = displayVehicles.find((v) => v.id === focusedVehicleId);
+  if (focused) return [focused.lat, focused.lng];
+}
     const first = displayVehicles[0];
     return first ? [first.geofence.lat, first.geofence.lng] : [DEFAULT_GEOFENCE.lat, DEFAULT_GEOFENCE.lng];
   }, [focusedVehicleId, displayVehicles]);
