@@ -24,6 +24,11 @@ export class Vehicle {
     onDelete: 'SET NULL',
   })
   assignedDriver: Driver | null;
+  @Column({ type: 'float', nullable: true })
+lat: number | null;
+
+@Column({ type: 'float', nullable: true })
+lng: number | null;
 
   @Column({ unique: true })
   plateNumber: string;
