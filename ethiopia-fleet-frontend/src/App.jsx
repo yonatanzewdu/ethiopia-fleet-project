@@ -1455,7 +1455,9 @@ function LiveMapView({ companyId, focusedVehicleId }) {
     ];
     return source.map((v) => {
       const vehicleGeofence = geofenceMap[v.id] || DEFAULT_GEOFENCE;
-      const [lat, lng]  = getVehicleCoordinates(v.id);
+      const [lat, lng] = (v.lat && v.lng)
+  ? [v.lat, v.lng]
+  : getVehicleCoordinates(v.id);
       const dist        = haversineMeters(lat, lng, vehicleGeofence.lat, vehicleGeofence.lng);
       const isBreaching = dist > vehicleGeofence.radius;
       return { ...v, lat, lng, dist, isBreaching, geofence: vehicleGeofence };
