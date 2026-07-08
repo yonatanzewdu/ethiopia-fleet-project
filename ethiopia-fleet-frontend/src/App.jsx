@@ -46,9 +46,19 @@ function getVehicleCoordinates(vehicleId) {
 // ── MAP CAMERA CONTROLLER ─────────────────────────────────────────────────────
 function MapCameraController({ target }) {
   const map = useMap();
+  // Depend on the actual lat/lng VALUES, not the array reference. `target`
+  // is rebuilt into a new array every time displayVehicles recomputes
+  // (e.g. on every polling refresh), even when the coordinates are
+  // identical. Using the array itself as a dependency would re-trigger
+  // flyTo on every poll and yank the camera back if the user had panned
+  // away. Keying off the primitive numbers means we only recenter when
+  // the position genuinely changes (a new vehicle is selected/tracked,
+  // or its GPS coordinates actually move).
+  const lat = target ? target[0] : null;
+  const lng = target ? target[1] : null;
   useEffect(() => {
-    if (target) map.flyTo(target, 15, { animate: true, duration: 1.5 });
-  }, [target, map]);
+    if (lat != null && lng != null) map.flyTo([lat, lng], 15, { animate: true, duration: 1.5 });
+  }, [lat, lng, map]);
   return null;
 }
 
@@ -1400,7 +1410,13 @@ function LiveMapView({ companyId, focusedVehicleId }) {
     } catch {}
   }, [companyId]);
 
-  useEffect(() => { loadVehiclesAndGeofences(); }, [loadVehiclesAndGeofences]);
+  // Initial load, then poll every 8s so vehicle pins reflect live GPS updates
+  // instead of sitting frozen at whatever position they had on mount.
+  useEffect(() => {
+    loadVehiclesAndGeofences();
+    const interval = setInterval(loadVehiclesAndGeofences, 8000);
+    return () => clearInterval(interval);
+  }, [loadVehiclesAndGeofences]);
 
   // ── FETCH GPS HISTORY TRAILS ───────────────────────────────────────────────
   const fetchTrails = useCallback(async () => {
