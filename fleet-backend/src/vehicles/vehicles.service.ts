@@ -4,10 +4,11 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Between } from 'typeorm';
 import { Vehicle } from './entities/vehicle.entity';
 import { Driver } from '../drivers/entities/driver.entity';
 import { Company } from '../companies/entities/company.entity';
+import { VehicleLocationHistory } from './entities/vehicle-location-history.entity';
 import { CreateVehicleDto } from './dto/create-vehicle.dto';
 import { UpdateVehicleDto } from './dto/update-vehicle.dto';
 
@@ -20,6 +21,8 @@ export class VehiclesService {
     private driverRepository: Repository<Driver>,
     @InjectRepository(Company)
     private companyRepository: Repository<Company>,
+    @InjectRepository(VehicleLocationHistory)
+    private locationHistoryRepository: Repository<VehicleLocationHistory>,
   ) {}
 
   async create(dto: CreateVehicleDto): Promise<Vehicle> {
@@ -118,5 +121,56 @@ export class VehiclesService {
 
     vehicle.assignedDriver = null;
     return this.vehicleRepository.save(vehicle);
+  }
+
+  // ── GPS HISTORY ────────────────────────────────────────────────────────────
+
+  /**
+   * Return all recorded GPS pings for a vehicle within [from, to].
+   * Results are ordered chronologically (oldest → newest).
+   */
+  async getLocationHistory(
+    vehicleId: number,
+    from: Date,
+    to: Date,
+  ): Promise<VehicleLocationHistory[]> {
+    await this.findOne(vehicleId); // throws 404 if vehicle doesn't exist
+
+    return this.locationHistoryRepository.find({
+      where: {
+        vehicle: { id: vehicleId },
+        recordedAt: Between(from, to),
+      },
+      order: { recordedAt: 'ASC' },
+    });
+  }
+
+  /**
+   * Record a single GPS ping for a vehicle.
+   * Called by your telematics ingestion pipeline (WebSocket / HTTP push).
+   */
+  async recordLocation(
+    vehicleId: number,
+    lat: number,
+    lng: number,
+    speed?: number,
+    heading?: number,
+  ): Promise<VehicleLocationHistory> {
+    const vehicle = await this.findOne(vehicleId);
+
+    // Also update the vehicle's current position so the live map stays current
+    vehicle.lat = lat;
+    vehicle.lng = lng;
+    await this.vehicleRepository.save(vehicle);
+
+    const point = this.locationHistoryRepository.create({
+      vehicle,
+      lat,
+      lng,
+      speed:   speed   ?? null,
+      heading: heading ?? null,
+      recordedAt: new Date(),
+    });
+    return this.locationHistoryRepository.save(point);
   }
 }
