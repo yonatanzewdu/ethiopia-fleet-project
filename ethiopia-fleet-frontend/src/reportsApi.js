@@ -3,7 +3,7 @@
 // (VITE_API_URL, falling back to the deployed Render URL) and always
 // include the Authorization header — instead of a separate hardcoded
 // localhost:3000 base URL.
-import { get } from './api/client';
+import { get, getBlob } from './api/client';
 
 function toQuery(params = {}) {
   const usp = new URLSearchParams();
@@ -33,4 +33,9 @@ export const reportsApi = {
 
   getVehicleComparison: (companyId, { vehicleId, startDate, endDate } = {}) =>
     get(`/reports/vehicle-comparison${toQuery({ companyId, vehicleId, startDate, endDate })}`),
+
+  // Downloads the full fleet PDF report as a Blob.
+  // The caller creates an <a> tag and triggers the browser download.
+  downloadFullReportPdf: (companyId, date) =>
+    getBlob(`/reports/full-report/pdf${toQuery({ companyId, date })}`),
 };
