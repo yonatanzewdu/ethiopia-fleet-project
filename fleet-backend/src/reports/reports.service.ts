@@ -540,9 +540,9 @@ const [company, vehicles, geofences, allTransactions, allFuelLogs, dashboard] =
       list.push(t);
       transactionsByVehicle.set(t.vehicleId, list as any);
     });
-    const fuelLogsByVehicle = new Map<number, any[]>();
-    (allFuelLogs as any[]).forEach((f) => {
-      const vId  = f.vehicle_id;
+  const fuelLogsByVehicle = new Map<number, any[]>();
+(allFuelLogs as any[]).forEach((f) => {
+  const vId  = f.vehicleId;  // ← camelCase
       const list = fuelLogsByVehicle.get(vId) ?? [];
       list.push(f);
       fuelLogsByVehicle.set(vId, list);
@@ -624,9 +624,9 @@ const [company, vehicles, geofences, allTransactions, allFuelLogs, dashboard] =
           amount:   parseFloat(t.amount),
         })),
         fuelLogs: (fuelLogsByVehicle.get(v.id) ?? []).map((f: any) => ({
-          date:      f.date,
-          litres:    parseFloat(f.litres),
-          totalCost: parseFloat(f.total_cost),
+  date:      f.date,
+  litres:    parseFloat(f.litres),
+  totalCost: parseFloat(f.totalCost),
         })),
       };
     });
