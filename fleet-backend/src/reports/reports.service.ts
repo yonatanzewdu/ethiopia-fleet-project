@@ -504,7 +504,7 @@ export class ReportsService {
     const EPOCH    = '2000-01-01';
     const WARN_DAYS = 30;
 
- const [company, vehicles, geofences, allTransactions, allFuelLogs, dashboard] =
+const [company, vehicles, geofences, allTransactions, allFuelLogs, dashboard] =
   await Promise.all([
     this.companyRepo.findOne({ where: { id: companyId } }),
     this.vehicleRepo.find({
@@ -514,7 +514,7 @@ export class ReportsService {
     this.geofenceRepo.find({ where: { companyId } }),
     this.finRepo.find({
       where: {
-        company: { id: companyId },
+        companyId,                              // ← real column, use directly
         approvalStatus: ApprovalStatus.APPROVED,
         date: Between(EPOCH, asOfDate),
       },
@@ -524,6 +524,12 @@ export class ReportsService {
       where: { company_id: companyId, date: Between(EPOCH, asOfDate) } as any,
       order: { date: 'DESC' } as any,
     }),
+    this.getDashboard(companyId, {
+      companyId,
+      startDate: EPOCH,
+      endDate:   asOfDate,
+    } as ReportsQueryDto),
+  ]);
 
     const geofenceByVehicle     = new Map(geofences.map((g: any) => [g.vehicleId, g]));
     const comparisonByVehicle   = new Map(dashboard.vehicleComparison.map((r) => [r.vehicleId, r]));
