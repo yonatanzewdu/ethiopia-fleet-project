@@ -9,10 +9,6 @@ import {
 import { MileageLog } from '../financials/entities/mileage-log.entity';
 import { FuelLog } from '../fuel/entities/fuel-log.entity';
 import { ReportsQueryDto } from './dto/reports-query.dto';
-// NOTE: adjust these four import paths/class names to match your actual
-// project structure if they differ — inferred from your /vehicles,
-// /drivers, /geofence and /companies endpoints and the existing
-// ../financials/entities/... , ../fuel/entities/... path convention.
 import { Vehicle } from '../vehicles/entities/vehicle.entity';
 import { Driver } from '../drivers/entities/driver.entity';
 import { Geofence } from '../geofence/entities/geofence.entity';
@@ -80,7 +76,6 @@ export interface ReportsDashboard {
   vehicleComparison: VehicleComparisonRow[];
 }
 
-// ── FULL PDF REPORT TYPES ─────────────────────────────────────────────────────
 export interface ComplianceAlert {
   type: 'INSURANCE' | 'INSPECTION' | 'LICENSE' | 'GEOFENCE_BREACH';
   severity: 'CRITICAL' | 'WARNING';
@@ -133,7 +128,6 @@ export class ReportsService {
     private readonly companyRepo: Repository<Company>,
   ) {}
 
-  // ── HAVERSINE — mirrors the same formula used on the live-map frontend ────
   private haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
     const R = 6_371_000;
     const toRad = (d: number) => (d * Math.PI) / 180;
@@ -152,7 +146,6 @@ export class ReportsService {
     return Math.floor((target.getTime() - asOf.getTime()) / (1000 * 60 * 60 * 24));
   }
 
-  // ── INTERNAL: total fuel spend in date range ───────────────────────────────
   private async getFuelTotalInRange(
     companyId: number,
     query: ReportsQueryDto,
@@ -174,7 +167,6 @@ export class ReportsService {
     return parseFloat(row?.total ?? '0');
   }
 
-  // ── 1. FLEET EXPENSE BREAKDOWN ─────────────────────────────────────────────
   async getExpenseBreakdown(
     companyId: number,
     query: ReportsQueryDto,
@@ -201,7 +193,6 @@ export class ReportsService {
       total: parseFloat(r.total),
     }));
 
-    // Append fuel as its own category so it appears in the breakdown bar chart
     const fuelTotal = await this.getFuelTotalInRange(companyId, query);
     if (fuelTotal > 0) {
       result.push({ category: 'fuel', total: fuelTotal });
@@ -210,9 +201,6 @@ export class ReportsService {
     return result;
   }
 
-  // ── 2. FUEL SUMMARY REPORT ─────────────────────────────────────────────────
-  // NOTE: FuelLog has no vehicle relation, so we query vehicleId only.
-  // plateNumber is resolved on the frontend from the vehicles list it already holds.
   async getFuelSummaryReport(
     companyId: number,
     query: ReportsQueryDto,
@@ -260,7 +248,7 @@ export class ReportsService {
       avgLitresPer100km,
       perVehicle: rows.map((r) => ({
         vehicleId:         Number(r.vehicleId),
-        plateNumber:       null, // resolved on frontend from vehicles list
+        plateNumber:       null,
         totalSpend:        parseFloat(r.totalSpend  || '0'),
         totalLitres:       parseFloat(r.totalLitres || '0'),
         totalKm:           parseFloat(r.totalKm     || '0'),
@@ -269,7 +257,6 @@ export class ReportsService {
     };
   }
 
-  // ── 3. CPK TREND (includes fuel cost per period) ──────────────────────────
   async getCpkTrend(companyId: number, query: ReportsQueryDto): Promise<CpkTrendPoint[]> {
     const granularity = (query as any).granularity ?? 'month';
     const bucket = granularity === 'week' ? 'week' : 'month';
@@ -354,7 +341,6 @@ export class ReportsService {
     });
   }
 
-  // ── 4. ASSET UTILIZATION ──────────────────────────────────────────────────
   async getAssetUtilization(
     companyId: number,
     query: ReportsQueryDto,
@@ -391,7 +377,6 @@ export class ReportsService {
     }));
   }
 
-  // ── 5. VEHICLE COMPARISON (fuel + non-fuel, no fl.vehicle join) ───────────
   async getVehicleComparison(
     companyId: number,
     query: ReportsQueryDto,
@@ -414,7 +399,6 @@ export class ReportsService {
       .addGroupBy('vehicle.plateNumber')
       .addGroupBy('vehicle.model');
 
-    // FuelLog has no vehicle relation — group by vehicleId only
     const fuelByVehicleQb = this.fuelRepo
       .createQueryBuilder('fl')
       .select('fl.vehicle_id', 'vehicleId')
@@ -456,8 +440,8 @@ export class ReportsService {
     ]);
 
     return Array.from(vehicleIds).map((vid) => {
-      const utilization      = utilizationRows.find((r) => r.vehicleId === vid);
-      const costEntry        = costByVehicle.get(vid);
+      const utilization          = utilizationRows.find((r) => r.vehicleId === vid);
+      const costEntry            = costByVehicle.get(vid);
       const totalApprovedCost    = costEntry?.total ?? 0;
       const totalFuelCost        = fuelCostByVehicle.get(vid) ?? 0;
       const totalCost            = totalApprovedCost + totalFuelCost;
@@ -478,7 +462,6 @@ export class ReportsService {
     });
   }
 
-  // ── COMBINED DASHBOARD ────────────────────────────────────────────────────
   async getDashboard(companyId: number, query: ReportsQueryDto): Promise<ReportsDashboard> {
     const [expenseBreakdown, fuelSummary, cpkTrend, vehicleComparison] = await Promise.all([
       this.getExpenseBreakdown(companyId, query),
@@ -491,9 +474,9 @@ export class ReportsService {
       .filter((r) => r.category !== 'fuel')
       .reduce((s, r) => s + r.total, 0);
 
-    const totalFuelSpend      = fuelSummary.totalFuelSpend;
-    const totalCombinedSpend  = cumulativeCompanySpend + totalFuelSpend;
-    const totalDistanceLogged = vehicleComparison.reduce((s, r) => s + r.totalDistanceCovered, 0);
+    const totalFuelSpend         = fuelSummary.totalFuelSpend;
+    const totalCombinedSpend     = cumulativeCompanySpend + totalFuelSpend;
+    const totalDistanceLogged    = vehicleComparison.reduce((s, r) => s + r.totalDistanceCovered, 0);
     const averageFleetEfficiency =
       totalDistanceLogged > 0
         ? parseFloat((totalCombinedSpend / totalDistanceLogged).toFixed(4))
@@ -507,7 +490,7 @@ export class ReportsService {
         totalDistanceLogged,
         averageFleetEfficiency,
         avgFuelPricePerLitre: fuelSummary.avgPricePerLitre,
-        avgLitresPer100km: fuelSummary.avgLitresPer100km,
+        avgLitresPer100km:    fuelSummary.avgLitresPer100km,
       },
       expenseBreakdown,
       fuelSummary,
@@ -516,12 +499,9 @@ export class ReportsService {
     };
   }
 
-  // ── FULL FLEET REPORT (feeds the PDF) ─────────────────────────────────────
-  // Covers everything from the company's earliest records through `asOfDate`,
-  // so it's a genuine "as of this date" snapshot rather than a narrow window.
   async getFullReportData(companyId: number, asOfDate: string): Promise<FullReportData> {
-    const asOf = new Date(asOfDate);
-    const EPOCH = '2000-01-01';
+    const asOf     = new Date(asOfDate);
+    const EPOCH    = '2000-01-01';
     const WARN_DAYS = 30;
 
     const [company, vehicles, geofences, allTransactions, allFuelLogs, dashboard] =
@@ -529,7 +509,7 @@ export class ReportsService {
         this.companyRepo.findOne({ where: { id: companyId } as any }),
         this.vehicleRepo.find({
           where: { companyId } as any,
-          relations: ['assignedDriver'],
+          relations: { assignedDriver: true }, // ← FIXED: was ['assignedDriver']
         }),
         this.geofenceRepo.find({ where: { companyId } as any }),
         this.finRepo.find({
@@ -540,8 +520,6 @@ export class ReportsService {
           } as any,
           order: { date: 'DESC' } as any,
         }),
-        // FuelLog uses snake_case property names elsewhere in this file
-        // (fl.company_id, fl.vehicle_id, fl.total_cost) — matched here.
         this.fuelRepo.find({
           where: { company_id: companyId, date: Between(EPOCH, asOfDate) } as any,
           order: { date: 'DESC' } as any,
@@ -549,12 +527,12 @@ export class ReportsService {
         this.getDashboard(companyId, {
           companyId,
           startDate: EPOCH,
-          endDate: asOfDate,
+          endDate:   asOfDate,
         } as ReportsQueryDto),
       ]);
 
-    const geofenceByVehicle = new Map(geofences.map((g: any) => [g.vehicleId, g]));
-    const comparisonByVehicle = new Map(dashboard.vehicleComparison.map((r) => [r.vehicleId, r]));
+    const geofenceByVehicle     = new Map(geofences.map((g: any) => [g.vehicleId, g]));
+    const comparisonByVehicle   = new Map(dashboard.vehicleComparison.map((r) => [r.vehicleId, r]));
     const transactionsByVehicle = new Map<number, typeof allTransactions>();
     (allTransactions as any[]).forEach((t) => {
       if (!t.vehicleId) return;
@@ -564,7 +542,7 @@ export class ReportsService {
     });
     const fuelLogsByVehicle = new Map<number, any[]>();
     (allFuelLogs as any[]).forEach((f) => {
-      const vId = f.vehicle_id;
+      const vId  = f.vehicle_id;
       const list = fuelLogsByVehicle.get(vId) ?? [];
       list.push(f);
       fuelLogsByVehicle.set(vId, list);
@@ -580,7 +558,7 @@ export class ReportsService {
         if (insuranceDays < 0) {
           alerts.push({ type: 'INSURANCE', severity: 'CRITICAL', assetName: v.plateNumber, detail: `Insurance expired ${Math.abs(insuranceDays)} day(s) ago` });
         } else if (insuranceDays <= WARN_DAYS) {
-          alerts.push({ type: 'INSURANCE', severity: 'WARNING', assetName: v.plateNumber, detail: `Insurance expires in ${insuranceDays} day(s)` });
+          alerts.push({ type: 'INSURANCE', severity: 'WARNING',  assetName: v.plateNumber, detail: `Insurance expires in ${insuranceDays} day(s)` });
         }
       }
 
@@ -589,7 +567,7 @@ export class ReportsService {
         if (inspectionDays < 0) {
           alerts.push({ type: 'INSPECTION', severity: 'CRITICAL', assetName: v.plateNumber, detail: `Inspection expired ${Math.abs(inspectionDays)} day(s) ago` });
         } else if (inspectionDays <= WARN_DAYS) {
-          alerts.push({ type: 'INSPECTION', severity: 'WARNING', assetName: v.plateNumber, detail: `Inspection expires in ${inspectionDays} day(s)` });
+          alerts.push({ type: 'INSPECTION', severity: 'WARNING',  assetName: v.plateNumber, detail: `Inspection expires in ${inspectionDays} day(s)` });
         }
       }
 
@@ -600,51 +578,54 @@ export class ReportsService {
           if (licenseDays < 0) {
             alerts.push({ type: 'LICENSE', severity: 'CRITICAL', assetName: who, detail: `License expired ${Math.abs(licenseDays)} day(s) ago` });
           } else if (licenseDays <= WARN_DAYS) {
-            alerts.push({ type: 'LICENSE', severity: 'WARNING', assetName: who, detail: `License expires in ${licenseDays} day(s)` });
+            alerts.push({ type: 'LICENSE', severity: 'WARNING',  assetName: who, detail: `License expires in ${licenseDays} day(s)` });
           }
         }
       }
 
       const geofence: any = geofenceByVehicle.get(v.id);
       if (geofence && v.lat != null && v.lng != null) {
-        const dist = this.haversineMeters(Number(v.lat), Number(v.lng), Number(geofence.lat), Number(geofence.lng));
+        const dist = this.haversineMeters(
+          Number(v.lat), Number(v.lng),
+          Number(geofence.lat), Number(geofence.lng),
+        );
         if (dist > Number(geofence.radius)) {
           alerts.push({
-            type: 'GEOFENCE_BREACH',
-            severity: 'CRITICAL',
+            type:      'GEOFENCE_BREACH',
+            severity:  'CRITICAL',
             assetName: v.plateNumber,
-            detail: `${Math.round(dist - Number(geofence.radius)).toLocaleString()} m beyond its ${Number(geofence.radius).toLocaleString()} m geofence`,
+            detail:    `${Math.round(dist - Number(geofence.radius)).toLocaleString()} m beyond its ${Number(geofence.radius).toLocaleString()} m geofence`,
           });
         }
       }
 
       return {
-        id: v.id,
-        plateNumber: v.plateNumber,
-        model: v.model ?? null,
-        chassisNumber: v.chassisNumber ?? null,
-        status: v.status ?? 'Active',
-        currentMileage: v.currentMileage ?? null,
-        insuranceExpiry: v.insuranceExpiry ?? null,
+        id:               v.id,
+        plateNumber:      v.plateNumber,
+        model:            v.model            ?? null,
+        chassisNumber:    v.chassisNumber    ?? null,
+        status:           v.status           ?? 'Active',
+        currentMileage:   v.currentMileage   ?? null,
+        insuranceExpiry:  v.insuranceExpiry  ?? null,
         inspectionExpiry: v.inspectionExpiry ?? null,
         assignedDriver: v.assignedDriver
           ? {
-              fullName: v.assignedDriver.fullName,
+              fullName:      v.assignedDriver.fullName,
               licenseNumber: v.assignedDriver.licenseNumber,
               licenseExpiry: v.assignedDriver.licenseExpiry ?? null,
             }
           : null,
         totalDistanceCovered: comparison?.totalDistanceCovered ?? 0,
-        totalCost: comparison?.totalCost ?? 0,
-        costPerKilometer: comparison?.costPerKilometer ?? null,
+        totalCost:            comparison?.totalCost            ?? 0,
+        costPerKilometer:     comparison?.costPerKilometer     ?? null,
         transactions: (transactionsByVehicle.get(v.id) ?? []).map((t: any) => ({
-          date: t.date,
+          date:     t.date,
           category: t.category,
-          amount: parseFloat(t.amount),
+          amount:   parseFloat(t.amount),
         })),
         fuelLogs: (fuelLogsByVehicle.get(v.id) ?? []).map((f: any) => ({
-          date: f.date,
-          litres: parseFloat(f.litres),
+          date:      f.date,
+          litres:    parseFloat(f.litres),
           totalCost: parseFloat(f.total_cost),
         })),
       };
@@ -653,9 +634,9 @@ export class ReportsService {
     return {
       company: company
         ? {
-            name: (company as any).name,
+            name:               (company as any).name,
             registrationNumber: (company as any).registrationNumber,
-            address: (company as any).address,
+            address:            (company as any).address,
           }
         : null,
       asOfDate,
