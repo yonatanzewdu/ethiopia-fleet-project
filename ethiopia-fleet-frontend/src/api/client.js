@@ -91,4 +91,19 @@ export const postForm = (path, formData) =>
     body: formData,
   }).then(handleResponse);
 
+// Binary download — returns a Blob instead of parsed JSON.
+// Used for PDF report endpoints.
+export async function getBlob(path) {
+  const res = await fetch(`${API}${path}`, { headers: authHeaders() });
+  if (res.status === 401) {
+    onUnauthorized();
+    throw new Error('Session expired. Please log in again.');
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.message || `Request failed (${res.status})`);
+  }
+  return res.blob();
+}
+
 export { API };
