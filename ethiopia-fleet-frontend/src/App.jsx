@@ -1,6 +1,6 @@
 import "leaflet/dist/leaflet.css";
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Circle, Polyline, Tooltip, useMap } from "react-leaflet";
 import L from "leaflet";
 import {
   LayoutDashboard, Truck, Users, Map, ShieldAlert,
@@ -1307,12 +1307,17 @@ function DriversView({ companyId }) {
 
 // ── LIVE MAP VIEW ─────────────────────────────────────────────────────────────
 
-function makeIcon(color, isBreaching) {
+function makeIcon(color, isBreaching, isSelected) {
+  // Selected vehicle gets a bright ring + slightly bigger pin so it's
+  // obvious which truck you just tapped, on top of the plate-number
+  // tooltip that labels every pin at all times.
+  const selectedRing = isSelected ? `0 0 0 3px #fff, 0 0 0 6px ${color}` : "";
   const pulse = isBreaching
-    ? `animation: breachPinPulse 0.9s ease-in-out infinite alternate; box-shadow: 0 0 0 4px ${color}55;`
-    : `box-shadow: 0 0 0 2px ${color}40;`;
+    ? `animation: breachPinPulse 0.9s ease-in-out infinite alternate; box-shadow: ${selectedRing ? selectedRing + "," : ""} 0 0 0 4px ${color}55;`
+    : `box-shadow: ${selectedRing ? selectedRing + "," : ""} 0 0 0 2px ${color}40;`;
+  const size = isSelected ? 34 : 28;
   const truckSvg = `
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(45deg);">
+    <svg width="${isSelected ? 17 : 14}" height="${isSelected ? 17 : 14}" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(45deg);">
       <path d="M10 17h4V5H2v12h3"/>
       <path d="M20 17h2v-3.34a4 4 0 0 0-1.17-2.83L19 9h-5v8h1"/>
       <circle cx="7.5" cy="17.5" r="2.5"/>
@@ -1320,10 +1325,10 @@ function makeIcon(color, isBreaching) {
     </svg>`;
   return L.divIcon({
     className: "",
-    iconAnchor: [14, 32],
-    popupAnchor: [0, -34],
+    iconAnchor: [size / 2, size + 4],
+    popupAnchor: [0, -(size + 6)],
     html: `<div style="display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.35));">
-      <div style="width:28px;height:28px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:${color};border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;${pulse}">
+      <div style="width:${size}px;height:${size}px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:${color};border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;${pulse}">
         ${truckSvg}
       </div>
     </div>`,
@@ -1484,14 +1489,17 @@ function LiveMapView({ companyId, focusedVehicleId }) {
 
   const breachCount = displayVehicles.filter((v) => v.isBreaching).length;
 
+  // Camera follows whichever vehicle is CURRENTLY SELECTED — this is what
+  // changes when you tap a vehicle card or a pin (selectVehicle sets
+  // selectedId). Previously this only looked at focusedVehicleId, which is
+  // just the one-time vehicle passed in from the alerts "Track" button, so
+  // tapping any other vehicle's card never moved the camera at all.
   const mapCenter = useMemo(() => {
-    if (focusedVehicleId) {
-  const focused = displayVehicles.find((v) => v.id === focusedVehicleId);
-  if (focused) return [focused.lat, focused.lng];
-}
+    const target = displayVehicles.find((v) => v.id === selectedId);
+    if (target) return [target.lat, target.lng];
     const first = displayVehicles[0];
     return first ? [first.geofence.lat, first.geofence.lng] : [DEFAULT_GEOFENCE.lat, DEFAULT_GEOFENCE.lng];
-  }, [focusedVehicleId, displayVehicles]);
+  }, [selectedId, displayVehicles]);
 
   function pinColor(v) {
     if (v.isBreaching)              return C.breach;
@@ -1829,13 +1837,18 @@ function LiveMapView({ companyId, focusedVehicleId }) {
 
           {displayVehicles.map((v) => {
             const color = pinColor(v);
+            const isSelected = v.id === selectedId;
             return (
               <Marker
                 key={v.id}
                 position={[v.lat, v.lng]}
-                icon={makeIcon(color, v.isBreaching)}
+                icon={makeIcon(color, v.isBreaching, isSelected)}
                 eventHandlers={{ click: () => selectVehicle(v.id) }}
+                zIndexOffset={isSelected ? 1000 : 0}
               >
+                <Tooltip permanent direction="top" offset={[0, isSelected ? -40 : -34]} className={`plate-tooltip${isSelected ? " plate-tooltip-active" : ""}`}>
+                  {v.plateNumber}
+                </Tooltip>
                 <Popup minWidth={200}>
                   <div style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 12, lineHeight: 1.75 }}>
                     <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>🚛 {v.plateNumber}</div>
@@ -2149,6 +2162,24 @@ const [showLanding, setShowLanding] = useState(
         .leaflet-control-attribution a { color: #3b82f6 !important; }
         .leaflet-bar                   { border-color: #d6dbe1 !important; }
         .leaflet-popup-content         { margin: 10px 14px !important; }
+
+        .leaflet-tooltip.plate-tooltip {
+          background: rgba(13,17,23,0.92) !important;
+          color: #e6edf3 !important;
+          border: 1px solid #30363d !important;
+          border-radius: 6px !important;
+          font-family: 'Inter', system-ui, sans-serif !important;
+          font-size: 11px !important;
+          font-weight: 600 !important;
+          padding: 2px 7px !important;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.35) !important;
+        }
+        .leaflet-tooltip.plate-tooltip::before { display: none !important; }
+        .leaflet-tooltip.plate-tooltip-active {
+          background: #3b82f6 !important;
+          color: #fff !important;
+          border-color: #1d4ed8 !important;
+        }
       `}</style>
 
       <div style={styles.app}>
@@ -2156,7 +2187,12 @@ const [showLanding, setShowLanding] = useState(
           <div
             onClick={() => setSideOpen(false)}
             style={{
-              position: "fixed", inset: 0, zIndex: 999,
+              // Leaflet's own controls (zoom buttons, attribution, etc.) use
+              // z-index 1000 by default, and were rendering later in the DOM
+              // than this backdrop — so with equal z-index the map controls
+              // won on stacking order and floated on top of the open menu.
+              // Bumping both above 1000 fixes that.
+              position: "fixed", inset: 0, zIndex: 2000,
               background: "rgba(0,0,0,0.55)",
             }}
           />
@@ -2168,7 +2204,7 @@ const [showLanding, setShowLanding] = useState(
             position: "fixed",
             top: 0, left: 0,
             height: "100vh",
-            zIndex: 1000,
+            zIndex: 2001,
             transform: sideOpen ? "translateX(0)" : "translateX(-100%)",
             transition: "transform 0.25s ease",
             boxShadow: sideOpen ? "4px 0 24px rgba(0,0,0,0.7)" : "none",
