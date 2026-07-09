@@ -514,15 +514,15 @@ const [company, vehicles, geofences, allTransactions, allFuelLogs, dashboard] =
     this.geofenceRepo.find({ where: { companyId } }),
     this.finRepo.find({
       where: {
-        companyId,                              // ← real column, use directly
+        companyId,
         approvalStatus: ApprovalStatus.APPROVED,
         date: Between(EPOCH, asOfDate),
       },
       order: { date: 'DESC' },
     }),
     this.fuelRepo.find({
-      where: { company_id: companyId, date: Between(EPOCH, asOfDate) } as any,
-      order: { date: 'DESC' } as any,
+      where: { companyId, date: Between(EPOCH, asOfDate) },  // ← fixed
+      order: { date: 'DESC' },
     }),
     this.getDashboard(companyId, {
       companyId,
