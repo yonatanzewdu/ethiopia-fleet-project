@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Between, Repository } from 'typeorm';
 import {
   FinancialTransaction,
   ApprovalStatus,
@@ -9,6 +9,14 @@ import {
 import { MileageLog } from '../financials/entities/mileage-log.entity';
 import { FuelLog } from '../fuel/entities/fuel-log.entity';
 import { ReportsQueryDto } from './dto/reports-query.dto';
+// NOTE: adjust these four import paths/class names to match your actual
+// project structure if they differ — inferred from your /vehicles,
+// /drivers, /geofence and /companies endpoints and the existing
+// ../financials/entities/... , ../fuel/entities/... path convention.
+import { Vehicle } from '../vehicles/entities/vehicle.entity';
+import { Driver } from '../drivers/entities/driver.entity';
+import { Geofence } from '../geofence/entities/geofence.entity';
+import { Company } from '../companies/entities/company.entity';
 
 export interface ExpenseBreakdownRow {
   category: TransactionCategory | 'fuel';
@@ -72,6 +80,40 @@ export interface ReportsDashboard {
   vehicleComparison: VehicleComparisonRow[];
 }
 
+// ── FULL PDF REPORT TYPES ─────────────────────────────────────────────────────
+export interface ComplianceAlert {
+  type: 'INSURANCE' | 'INSPECTION' | 'LICENSE' | 'GEOFENCE_BREACH';
+  severity: 'CRITICAL' | 'WARNING';
+  assetName: string;
+  detail: string;
+}
+
+export interface VehicleReportRow {
+  id: number;
+  plateNumber: string;
+  model: string | null;
+  chassisNumber: string | null;
+  status: string;
+  currentMileage: number | null;
+  insuranceExpiry: string | null;
+  inspectionExpiry: string | null;
+  assignedDriver: { fullName: string; licenseNumber: string; licenseExpiry: string | null } | null;
+  totalDistanceCovered: number;
+  totalCost: number;
+  costPerKilometer: number | null;
+  transactions: Array<{ date: string; category: string; amount: number }>;
+  fuelLogs: Array<{ date: string; litres: number; totalCost: number }>;
+}
+
+export interface FullReportData {
+  company: { name: string; registrationNumber: string; address: string } | null;
+  asOfDate: string;
+  generatedAt: string;
+  dashboard: ReportsDashboard;
+  vehicles: VehicleReportRow[];
+  alerts: ComplianceAlert[];
+}
+
 @Injectable()
 export class ReportsService {
   constructor(
@@ -81,7 +123,34 @@ export class ReportsService {
     private readonly mileageRepo: Repository<MileageLog>,
     @InjectRepository(FuelLog)
     private readonly fuelRepo: Repository<FuelLog>,
+    @InjectRepository(Vehicle)
+    private readonly vehicleRepo: Repository<Vehicle>,
+    @InjectRepository(Driver)
+    private readonly driverRepo: Repository<Driver>,
+    @InjectRepository(Geofence)
+    private readonly geofenceRepo: Repository<Geofence>,
+    @InjectRepository(Company)
+    private readonly companyRepo: Repository<Company>,
   ) {}
+
+  // ── HAVERSINE — mirrors the same formula used on the live-map frontend ────
+  private haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const R = 6_371_000;
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  private daysUntil(dateStr: string | null | undefined, asOf: Date): number | null {
+    if (!dateStr) return null;
+    const target = new Date(dateStr);
+    if (Number.isNaN(target.getTime())) return null;
+    return Math.floor((target.getTime() - asOf.getTime()) / (1000 * 60 * 60 * 24));
+  }
 
   // ── INTERNAL: total fuel spend in date range ───────────────────────────────
   private async getFuelTotalInRange(
@@ -444,6 +513,156 @@ export class ReportsService {
       fuelSummary,
       cpkTrend,
       vehicleComparison,
+    };
+  }
+
+  // ── FULL FLEET REPORT (feeds the PDF) ─────────────────────────────────────
+  // Covers everything from the company's earliest records through `asOfDate`,
+  // so it's a genuine "as of this date" snapshot rather than a narrow window.
+  async getFullReportData(companyId: number, asOfDate: string): Promise<FullReportData> {
+    const asOf = new Date(asOfDate);
+    const EPOCH = '2000-01-01';
+    const WARN_DAYS = 30;
+
+    const [company, vehicles, geofences, allTransactions, allFuelLogs, dashboard] =
+      await Promise.all([
+        this.companyRepo.findOne({ where: { id: companyId } as any }),
+        this.vehicleRepo.find({
+          where: { companyId } as any,
+          relations: ['assignedDriver'],
+        }),
+        this.geofenceRepo.find({ where: { companyId } as any }),
+        this.finRepo.find({
+          where: {
+            companyId,
+            approvalStatus: ApprovalStatus.APPROVED,
+            date: Between(EPOCH, asOfDate),
+          } as any,
+          order: { date: 'DESC' } as any,
+        }),
+        // FuelLog uses snake_case property names elsewhere in this file
+        // (fl.company_id, fl.vehicle_id, fl.total_cost) — matched here.
+        this.fuelRepo.find({
+          where: { company_id: companyId, date: Between(EPOCH, asOfDate) } as any,
+          order: { date: 'DESC' } as any,
+        }),
+        this.getDashboard(companyId, {
+          companyId,
+          startDate: EPOCH,
+          endDate: asOfDate,
+        } as ReportsQueryDto),
+      ]);
+
+    const geofenceByVehicle = new Map(geofences.map((g: any) => [g.vehicleId, g]));
+    const comparisonByVehicle = new Map(dashboard.vehicleComparison.map((r) => [r.vehicleId, r]));
+    const transactionsByVehicle = new Map<number, typeof allTransactions>();
+    (allTransactions as any[]).forEach((t) => {
+      if (!t.vehicleId) return;
+      const list = transactionsByVehicle.get(t.vehicleId) ?? [];
+      list.push(t);
+      transactionsByVehicle.set(t.vehicleId, list as any);
+    });
+    const fuelLogsByVehicle = new Map<number, any[]>();
+    (allFuelLogs as any[]).forEach((f) => {
+      const vId = f.vehicle_id;
+      const list = fuelLogsByVehicle.get(vId) ?? [];
+      list.push(f);
+      fuelLogsByVehicle.set(vId, list);
+    });
+
+    const alerts: ComplianceAlert[] = [];
+
+    const vehicleRows: VehicleReportRow[] = (vehicles as any[]).map((v) => {
+      const comparison = comparisonByVehicle.get(v.id);
+
+      const insuranceDays = this.daysUntil(v.insuranceExpiry, asOf);
+      if (insuranceDays !== null) {
+        if (insuranceDays < 0) {
+          alerts.push({ type: 'INSURANCE', severity: 'CRITICAL', assetName: v.plateNumber, detail: `Insurance expired ${Math.abs(insuranceDays)} day(s) ago` });
+        } else if (insuranceDays <= WARN_DAYS) {
+          alerts.push({ type: 'INSURANCE', severity: 'WARNING', assetName: v.plateNumber, detail: `Insurance expires in ${insuranceDays} day(s)` });
+        }
+      }
+
+      const inspectionDays = this.daysUntil(v.inspectionExpiry, asOf);
+      if (inspectionDays !== null) {
+        if (inspectionDays < 0) {
+          alerts.push({ type: 'INSPECTION', severity: 'CRITICAL', assetName: v.plateNumber, detail: `Inspection expired ${Math.abs(inspectionDays)} day(s) ago` });
+        } else if (inspectionDays <= WARN_DAYS) {
+          alerts.push({ type: 'INSPECTION', severity: 'WARNING', assetName: v.plateNumber, detail: `Inspection expires in ${inspectionDays} day(s)` });
+        }
+      }
+
+      if (v.assignedDriver) {
+        const licenseDays = this.daysUntil(v.assignedDriver.licenseExpiry, asOf);
+        if (licenseDays !== null) {
+          const who = `${v.assignedDriver.fullName} (${v.plateNumber})`;
+          if (licenseDays < 0) {
+            alerts.push({ type: 'LICENSE', severity: 'CRITICAL', assetName: who, detail: `License expired ${Math.abs(licenseDays)} day(s) ago` });
+          } else if (licenseDays <= WARN_DAYS) {
+            alerts.push({ type: 'LICENSE', severity: 'WARNING', assetName: who, detail: `License expires in ${licenseDays} day(s)` });
+          }
+        }
+      }
+
+      const geofence: any = geofenceByVehicle.get(v.id);
+      if (geofence && v.lat != null && v.lng != null) {
+        const dist = this.haversineMeters(Number(v.lat), Number(v.lng), Number(geofence.lat), Number(geofence.lng));
+        if (dist > Number(geofence.radius)) {
+          alerts.push({
+            type: 'GEOFENCE_BREACH',
+            severity: 'CRITICAL',
+            assetName: v.plateNumber,
+            detail: `${Math.round(dist - Number(geofence.radius)).toLocaleString()} m beyond its ${Number(geofence.radius).toLocaleString()} m geofence`,
+          });
+        }
+      }
+
+      return {
+        id: v.id,
+        plateNumber: v.plateNumber,
+        model: v.model ?? null,
+        chassisNumber: v.chassisNumber ?? null,
+        status: v.status ?? 'Active',
+        currentMileage: v.currentMileage ?? null,
+        insuranceExpiry: v.insuranceExpiry ?? null,
+        inspectionExpiry: v.inspectionExpiry ?? null,
+        assignedDriver: v.assignedDriver
+          ? {
+              fullName: v.assignedDriver.fullName,
+              licenseNumber: v.assignedDriver.licenseNumber,
+              licenseExpiry: v.assignedDriver.licenseExpiry ?? null,
+            }
+          : null,
+        totalDistanceCovered: comparison?.totalDistanceCovered ?? 0,
+        totalCost: comparison?.totalCost ?? 0,
+        costPerKilometer: comparison?.costPerKilometer ?? null,
+        transactions: (transactionsByVehicle.get(v.id) ?? []).map((t: any) => ({
+          date: t.date,
+          category: t.category,
+          amount: parseFloat(t.amount),
+        })),
+        fuelLogs: (fuelLogsByVehicle.get(v.id) ?? []).map((f: any) => ({
+          date: f.date,
+          litres: parseFloat(f.litres),
+          totalCost: parseFloat(f.total_cost),
+        })),
+      };
+    });
+
+    return {
+      company: company
+        ? {
+            name: (company as any).name,
+            registrationNumber: (company as any).registrationNumber,
+            address: (company as any).address,
+          }
+        : null,
+      asOfDate,
+      generatedAt: new Date().toISOString(),
+      dashboard,
+      vehicles: vehicleRows,
+      alerts,
     };
   }
 }
