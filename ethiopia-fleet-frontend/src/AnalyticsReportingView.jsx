@@ -2,9 +2,11 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   DollarSign, Route as RouteIcon, Gauge, Truck, Calendar,
   ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, RefreshCw, Building2,
-  Flame, Droplets,
+  Flame, Droplets, FileDown, ShieldAlert,
 } from "lucide-react";
 import { reportsApi } from "./reportsApi";
+
+const today = () => new Date().toISOString().slice(0, 10);
 
 const C = {
   bg: "#0d1117", surface: "#161b22", elevated: "#1c2330", border: "#30363d",
@@ -69,6 +71,18 @@ const styles = {
     display: "flex", justifyContent: "space-between", alignItems: "center",
     padding: "8px 0", borderBottom: `1px solid ${C.border}`, fontSize: 12,
   },
+  reportBar: {
+    display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-end",
+    justifyContent: "space-between",
+    background: "linear-gradient(135deg, #16213a 0%, #161b22 100%)",
+    border: `1px solid ${C.accent}55`, borderRadius: 10,
+    padding: "14px 16px", marginBottom: 14,
+  },
+  reportBtn: {
+    display: "inline-flex", alignItems: "center", gap: 8, padding: "9px 16px",
+    borderRadius: 7, border: "none", background: C.accent, color: "#fff",
+    fontWeight: 600, fontSize: 13, cursor: "pointer", whiteSpace: "nowrap",
+  },
 };
 
 const CATEGORY_COLORS = {
@@ -96,6 +110,31 @@ export default function AnalyticsReportingView({ companyId, onToast }) {
   const [error, setError]         = useState(null);
   const [sortKey, setSortKey]     = useState("totalCost");
   const [sortDir, setSortDir]     = useState("desc");
+
+  // ── Full PDF report generation ──────────────────────────────────────────
+  const [reportDate, setReportDate]           = useState(today);
+  const [generatingReport, setGeneratingReport] = useState(false);
+
+  const handleDownloadReport = async () => {
+    if (!companyId) return;
+    setGeneratingReport(true);
+    try {
+      const blob = await reportsApi.downloadFullReportPdf(companyId, reportDate);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `fleet-report-${reportDate}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      onToast?.("Report downloaded", "success");
+    } catch {
+      onToast?.("Could not generate PDF report — check backend", "error");
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
 
   useEffect(() => {
     if (!companyId) return;
@@ -168,6 +207,35 @@ export default function AnalyticsReportingView({ companyId, onToast }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+      {/* ── Full PDF Report Generator ── */}
+      <div style={styles.reportBar}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 700, color: C.text }}>
+            <ShieldAlert size={16} color={C.accent} /> Full Fleet PDF Report
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, maxWidth: 420 }}>
+            Every vehicle, driver, expense, fuel log, and compliance/geofence alert —
+            covering everything from the company's first record through the date below.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div style={styles.controlGroup}>
+            <span style={styles.label}><Calendar size={10} style={{ marginRight: 4, verticalAlign: "-1px" }} />Report Date</span>
+            <input
+              type="date"
+              style={styles.dateInput}
+              value={reportDate}
+              max={today()}
+              onChange={(e) => setReportDate(e.target.value)}
+            />
+          </div>
+          <button style={styles.reportBtn} onClick={handleDownloadReport} disabled={generatingReport || !companyId}>
+            <FileDown size={14} style={generatingReport ? { animation: "spin 1s linear infinite" } : undefined} />
+            {generatingReport ? "Generating…" : "Generate PDF Report"}
+          </button>
+        </div>
+      </div>
 
       {/* ── Controls ── */}
       <div style={styles.controlBar}>
