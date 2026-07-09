@@ -504,32 +504,26 @@ export class ReportsService {
     const EPOCH    = '2000-01-01';
     const WARN_DAYS = 30;
 
-    const [company, vehicles, geofences, allTransactions, allFuelLogs, dashboard] =
-      await Promise.all([
-        this.companyRepo.findOne({ where: { id: companyId } as any }),
-        this.vehicleRepo.find({
-          where: { companyId } as any,
-          relations: { assignedDriver: true }, // ← FIXED: was ['assignedDriver']
-        }),
-        this.geofenceRepo.find({ where: { companyId } as any }),
-        this.finRepo.find({
-          where: {
-            companyId,
-            approvalStatus: ApprovalStatus.APPROVED,
-            date: Between(EPOCH, asOfDate),
-          } as any,
-          order: { date: 'DESC' } as any,
-        }),
-        this.fuelRepo.find({
-          where: { company_id: companyId, date: Between(EPOCH, asOfDate) } as any,
-          order: { date: 'DESC' } as any,
-        }),
-        this.getDashboard(companyId, {
-          companyId,
-          startDate: EPOCH,
-          endDate:   asOfDate,
-        } as ReportsQueryDto),
-      ]);
+ const [company, vehicles, geofences, allTransactions, allFuelLogs, dashboard] =
+  await Promise.all([
+    this.companyRepo.findOne({ where: { id: companyId } }),
+    this.vehicleRepo.find({
+      where: { company: { id: companyId } },
+      relations: { company: true, assignedDriver: true },
+    }),
+    this.geofenceRepo.find({ where: { companyId } }),
+    this.finRepo.find({
+      where: {
+        company: { id: companyId },
+        approvalStatus: ApprovalStatus.APPROVED,
+        date: Between(EPOCH, asOfDate),
+      },
+      order: { date: 'DESC' },
+    }),
+    this.fuelRepo.find({
+      where: { company_id: companyId, date: Between(EPOCH, asOfDate) } as any,
+      order: { date: 'DESC' } as any,
+    }),
 
     const geofenceByVehicle     = new Map(geofences.map((g: any) => [g.vehicleId, g]));
     const comparisonByVehicle   = new Map(dashboard.vehicleComparison.map((r) => [r.vehicleId, r]));
