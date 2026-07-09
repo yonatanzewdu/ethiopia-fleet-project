@@ -1,5 +1,5 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
-import { Response } from 'express';
+import type { Response } from 'express';
 import { ReportsService } from './reports.service';
 import { ReportsPdfService } from './reports-pdf.service';
 import { ReportsQueryDto } from './dto/reports-query.dto';
